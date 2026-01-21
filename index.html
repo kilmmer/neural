@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Rede Neural Evolutiva (Auto-Growth)</title>
+    <style>
+        body {
+            background-color: #0d0d0d;
+            color: #e0e0e0;
+            font-family: 'Segoe UI', 'Consolas', monospace;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            height: 95vh;
+        }
+
+        .col-left {
+            width: 30%;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .col-right {
+            width: 70%;
+            display: flex;
+            flex-direction: column;
+            background: #1a1a1a;
+            border-radius: 12px;
+            border: 1px solid #333;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .panel {
+            background: #1a1a1a;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+
+        h1 {
+            margin: 0 0 5px 0;
+            color: #00bcd4;
+            font-size: 1.4rem;
+        }
+
+        h2 {
+            font-size: 0.9rem;
+            color: #888;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+        }
+
+        textarea {
+            width: 100%;
+            height: 80px;
+            background: #252525;
+            color: #fff;
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 10px;
+            resize: none;
+            box-sizing: border-box;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            background: #252525;
+            color: white;
+            border: 1px solid #444;
+            border-radius: 6px;
+            box-sizing: border-box;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            margin-top: 10px;
+            border: none;
+            font-weight: bold;
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.2s;
+        }
+
+        .btn-train {
+            background: #444;
+            color: #fff;
+        }
+
+        .btn-gen {
+            background: #00bcd4;
+            color: #000;
+        }
+
+        button:hover {
+            filter: brightness(1.2);
+        }
+
+        #networkCanvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        /* Notificações de Crescimento */
+        #growthLog {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            font-size: 0.8rem;
+            color: #00ff80;
+            text-align: right;
+            pointer-events: none;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 5px;
+            font-size: 0.85rem;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: #333;
+            margin-top: 5px;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #ff9800;
+            width: 0%;
+            transition: width 0.2s;
+        }
+
+        #generatedText {
+            color: #0f0;
+            font-size: 1.1rem;
+            min-height: 40px;
+            margin-top: 15px;
+            white-space: pre-wrap;
+            border-top: 1px solid #333;
+            padding-top: 10px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="col-left">
+        <div class="panel">
+            <h1>1. Cérebro Dinâmico</h1>
+            <p style="font-size: 0.8rem; color:#aaa; margin-top:0;">Se a rede estagnar, ela cria novos neurônios.</p>
+            <textarea id="corpusText"
+                spellcheck="false">o rato roeu a roupa do rei de roma e a rainha de raiva roeu o resto</textarea>
+            <button onclick="restartNetwork()" class="btn-train">🔄 REINICIAR (CÉREBRO NOVO)</button>
+
+            <div style="margin-top: 15px; border-top: 1px solid #333; padding-top: 10px;">
+                <div class="stat-row">
+                    <span style="color:#aaa">Epoch:</span>
+                    <span id="epochDisplay">0</span>
+                </div>
+                <div class="stat-row">
+                    <span style="color:#aaa">Erro Atual:</span>
+                    <span id="lossDisplay" style="color:red; font-weight:bold;">1.0</span>
+                </div>
+                <div class="stat-row">
+                    <span style="color:#aaa">Neurônios Ocultos:</span>
+                    <span id="neuronCount" style="color:#00bcd4; font-weight:bold;">0</span>
+                </div>
+
+                <div style="margin-top: 10px;">
+                    <span style="font-size:0.75rem; color:#ff9800;">Nível de Frustração (Estagnação):</span>
+                    <div class="progress-bar">
+                        <div id="patienceBar" class="progress-fill"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="panel" style="flex-grow: 1;">
+            <h1>2. Testar Inteligência</h1>
+            <input type="text" id="seedWord" placeholder="Palavra inicial..." value="o">
+            <button onclick="generateStory()" class="btn-gen">✨ GERAR TEXTO</button>
+            <div id="generatedText">...</div>
+        </div>
+    </div>
+
+    <div class="col-right">
+        <canvas id="networkCanvas"></canvas>
+        <div id="growthLog"></div>
+        <div style="position:absolute; top:20px; left:20px; pointer-events:none;">
+            <div
+                style="background:rgba(0,0,0,0.6); padding:5px; border:1px solid #00ff80; color:#00ff80; font-size:0.7rem; display:inline-block; margin-bottom:5px;">
+                Verde: Reforço</div><br>
+            <div
+                style="background:rgba(0,0,0,0.6); padding:5px; border:1px solid #ff3c3c; color:#ff3c3c; font-size:0.7rem; display:inline-block;">
+                Vermelho: Inibição</div>
+        </div>
+    </div>
+
+    <script>
+        /* ==========================================================================
+           MATEMÁTICA DA EVOLUÇÃO (Matrix Resize)
+           ========================================================================== */
+        class Matrix {
+            constructor(r, c) {
+                this.rows = r; this.cols = c;
+                this.data = Array(r).fill().map(() => Array(c).fill(0));
+            }
+
+            // O SEGREDO DA EVOLUÇÃO: Redimensionar preservando dados
+            resize(newRows, newCols) {
+                let newData = Array(newRows).fill().map(() => Array(newCols).fill(0));
+
+                for (let i = 0; i < newRows; i++) {
+                    for (let j = 0; j < newCols; j++) {
+                        // Se a posição existia antes, copia o valor (Memória)
+                        if (i < this.rows && j < this.cols) {
+                            newData[i][j] = this.data[i][j];
+                        } else {
+                            // Se é uma nova sinapse, começa aleatória (Criatividade)
+                            // Usamos valores pequenos para não causar um choque grande no sistema
+                            newData[i][j] = (Math.random() * 2 - 1) * 0.5;
+                        }
+                    }
+                }
+                this.data = newData;
+                this.rows = newRows;
+                this.cols = newCols;
+            }
+
+            static fromArray(a) { return new Matrix(a.length, 1).map((e, i) => a[i]); }
+            toArray() { let a = []; this.data.forEach(r => r.forEach(e => a.push(e))); return a; }
+            randomize() { this.data = this.data.map(r => r.map(() => Math.random() * 2 - 1)); }
+            add(n) { if (n instanceof Matrix) this.data = this.data.map((r, i) => r.map((e, j) => e + n.data[i][j])); else this.data = this.data.map(r => r.map(e => e + n)); }
+            static multiply(a, b) {
+                if (a.cols !== b.rows) return undefined;
+                let res = new Matrix(a.rows, b.cols);
+                res.data = res.data.map((r, i) => r.map((_, j) => {
+                    let sum = 0; for (let k = 0; k < a.cols; k++) sum += a.data[i][k] * b.data[k][j]; return sum;
+                })); return res;
+            }
+            multiply(n) { if (n instanceof Matrix) this.data = this.data.map((r, i) => r.map((e, j) => e * n.data[i][j])); else this.data = this.data.map(r => r.map(e => e * n)); }
+            map(f) { this.data = this.data.map((r, i) => r.map((e, j) => f(e, i, j))); return this; }
+            static map(m, f) { let res = new Matrix(m.rows, m.cols); res.data = m.data.map((r, i) => r.map((e, j) => f(e, i, j))); return res; }
+            static transpose(m) { let res = new Matrix(m.cols, m.rows); for (let i = 0; i < m.rows; i++) for (let j = 0; j < m.cols; j++) res.data[j][i] = m.data[i][j]; return res; }
+            static subtract(a, b) { let res = new Matrix(a.rows, a.cols); res.data = res.data.map((r, i) => r.map((_, j) => a.data[i][j] - b.data[i][j])); return res; }
+        }
+
+        class NeuralNetwork {
+            constructor(i, h, o) {
+                this.input_nodes = i;
+                this.hidden_nodes = h;
+                this.output_nodes = o;
+
+                this.weights_ih = new Matrix(h, i);
+                this.weights_ho = new Matrix(o, h);
+                this.weights_ih.randomize();
+                this.weights_ho.randomize();
+
+                this.bias_h = new Matrix(h, 1);
+                this.bias_o = new Matrix(o, 1);
+                this.bias_h.randomize();
+                this.bias_o.randomize();
+
+                this.learning_rate = 0.1;
+            }
+
+            // A CIRURGIA NEURAL
+            addHiddenNeuron() {
+                this.hidden_nodes++;
+                // 1. Aumenta linhas da matriz IH (recebe mais inputs)
+                this.weights_ih.resize(this.hidden_nodes, this.input_nodes);
+                // 2. Aumenta bias
+                this.bias_h.resize(this.hidden_nodes, 1);
+                // 3. Aumenta colunas da matriz HO (envia para o output)
+                this.weights_ho.resize(this.output_nodes, this.hidden_nodes);
+            }
+
+            sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+            dsigmoid(y) { return y * (1 - y); }
+
+            feedForward(input_array) {
+                let inputs = Matrix.fromArray(input_array);
+                let hidden = Matrix.multiply(this.weights_ih, inputs);
+                hidden.add(this.bias_h); hidden.map(this.sigmoid);
+                let output = Matrix.multiply(this.weights_ho, hidden);
+                output.add(this.bias_o); output.map(this.sigmoid);
+                return { output: output.toArray(), hidden: hidden.toArray() };
+            }
+
+            train(input_array, target_array) {
+                let inputs = Matrix.fromArray(input_array);
+                let hidden = Matrix.multiply(this.weights_ih, inputs);
+                hidden.add(this.bias_h); hidden.map(this.sigmoid);
+                let outputs = Matrix.multiply(this.weights_ho, hidden);
+                outputs.add(this.bias_o); outputs.map(this.sigmoid);
+
+                let targets = Matrix.fromArray(target_array);
+                let output_errors = Matrix.subtract(targets, outputs);
+
+                let gradients = Matrix.map(outputs, this.dsigmoid);
+                gradients.multiply(output_errors); gradients.multiply(this.learning_rate);
+
+                let hidden_T = Matrix.transpose(hidden);
+                let who_deltas = Matrix.multiply(gradients, hidden_T);
+                this.weights_ho.add(who_deltas); this.bias_o.add(gradients);
+
+                let who_t = Matrix.transpose(this.weights_ho);
+                let hidden_errors = Matrix.multiply(who_t, output_errors);
+                let hidden_gradient = Matrix.map(hidden, this.dsigmoid);
+                hidden_gradient.multiply(hidden_errors); hidden_gradient.multiply(this.learning_rate);
+
+                let inputs_T = Matrix.transpose(inputs);
+                let wih_deltas = Matrix.multiply(hidden_gradient, inputs_T);
+                this.weights_ih.add(wih_deltas); this.bias_h.add(hidden_gradient);
+            }
+        }
+
+        /* ==========================================================================
+           LÓGICA DO APP
+           ========================================================================== */
+        class TextProcessor {
+            constructor(text) {
+                this.rawText = text.toLowerCase().replace(/[.,!?;:]/g, '').replace(/\n/g, ' ');
+                this.words = this.rawText.split(/\s+/).filter(w => w.length > 0);
+                this.vocab = [...new Set(this.words)];
+                this.vocabSize = this.vocab.length;
+            }
+            wordToVector(word) {
+                let v = Array(this.vocabSize).fill(0);
+                let i = this.vocab.indexOf(word); if (i !== -1) v[i] = 1; return v;
+            }
+            vectorToWord(vector) {
+                let maxVal = -Infinity, maxIndex = 0;
+                vector.forEach((val, i) => { if (val > maxVal) { maxVal = val; maxIndex = i; } });
+                return { word: this.vocab[maxIndex], index: maxIndex, confidence: maxVal };
+            }
+            generateData() {
+                let d = [];
+                for (let i = 0; i < this.words.length - 1; i++) {
+                    d.push({ i: this.wordToVector(this.words[i]), t: this.wordToVector(this.words[i + 1]) });
+                }
+                return d;
+            }
+        }
+
+        let processor, nn, dataset;
+        let epoch = 0;
+        let currentVisualInput = null;
+
+        // VARIÁVEIS DE EVOLUÇÃO
+        let stagnationCounter = 0;
+        let lastBestLoss = 1.0;
+        const PATIENCE_LIMIT = 50; // Quantos frames esperando antes de crescer
+
+        const canvas = document.getElementById('networkCanvas');
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = canvas.parentElement.offsetWidth;
+            canvas.height = canvas.parentElement.offsetHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        function restartNetwork() {
+            let text = document.getElementById('corpusText').value;
+            processor = new TextProcessor(text);
+            dataset = processor.generateData();
+
+            // Começa PEQUENO. Apenas 5 neurônios ocultos (ou o tamanho do vocab, o que for menor)
+            // Isso força a rede a precisar crescer se o problema for complexo
+            let initialHidden = Math.min(5, processor.vocabSize);
+
+            nn = new NeuralNetwork(processor.vocabSize, initialHidden, processor.vocabSize);
+            epoch = 0;
+            stagnationCounter = 0;
+            lastBestLoss = 1.0;
+
+            document.getElementById('growthLog').innerHTML = '';
+        }
+
+        function generateStory() {
+            let seed = document.getElementById('seedWord').value.toLowerCase().trim();
+            if (!processor.vocab.includes(seed)) return alert("Palavra desconhecida!");
+
+            let resultHtml = "";
+            let current = seed;
+
+            for (let i = 0; i < 15; i++) {
+                let inputVec = processor.wordToVector(current);
+                if (i === 0) currentVisualInput = inputVec;
+
+                let res = nn.feedForward(inputVec);
+                let prediction = processor.vectorToWord(res.output);
+
+                let color = prediction.confidence > 0.8 ? '#00ff80' : '#ffff00';
+                resultHtml += `<span style="color:${color}">${current} </span>`;
+                current = prediction.word;
+            }
+            document.getElementById('generatedText').innerHTML = resultHtml + "...";
+        }
+
+        // === VISUALIZADOR ===
+        function drawNetwork() {
+            ctx.fillStyle = 'rgba(26, 26, 26, 0.2)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            if (!nn) return;
+
+            let visInput = currentVisualInput || dataset[Math.floor(Math.random() * dataset.length)].i;
+            let visResult = nn.feedForward(visInput);
+
+            const layerX = [50, canvas.width / 2, canvas.width - 50];
+            const nodeY = (total, i) => {
+                let availH = canvas.height - 40;
+                let spacing = Math.min(availH / total, 40);
+                let totalH = spacing * total;
+                return ((canvas.height - totalH) / 2) + (i * spacing) + (spacing / 2);
+            };
+
+            // Sinapses
+            const drawSynapse = (x1, y1, x2, y2, w) => {
+                if (Math.abs(w) < 0.3) return; // Filtro de ruído
+                ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+                let alpha = Math.min(Math.abs(w) * 0.5, 0.8);
+                ctx.lineWidth = Math.min(Math.abs(w) * 1.5, 3);
+                ctx.strokeStyle = w > 0 ? `rgba(0, 255, 128, ${alpha})` : `rgba(255, 60, 60, ${alpha})`;
+                ctx.stroke();
+            };
+
+            for (let h = 0; h < nn.hidden_nodes; h++) {
+                for (let i = 0; i < nn.input_nodes; i++) {
+                    drawSynapse(layerX[0], nodeY(nn.input_nodes, i), layerX[1], nodeY(nn.hidden_nodes, h), nn.weights_ih.data[h][i]);
+                }
+            }
+            for (let o = 0; o < nn.output_nodes; o++) {
+                for (let h = 0; h < nn.hidden_nodes; h++) {
+                    drawSynapse(layerX[1], nodeY(nn.hidden_nodes, h), layerX[2], nodeY(nn.output_nodes, o), nn.weights_ho.data[o][h]);
+                }
+            }
+
+            // Nós (Cérebro Central em destaque)
+            const drawNodes = (count, x, values, isHidden) => {
+                for (let i = 0; i < count; i++) {
+                    let y = nodeY(count, i);
+                    let val = values ? values[i] : 0;
+                    ctx.beginPath();
+                    ctx.arc(x, y, isHidden ? 4 : 3, 0, Math.PI * 2);
+                    let bright = Math.floor(val * 255);
+                    ctx.fillStyle = isHidden ? '#00bcd4' : `rgb(${bright}, ${bright}, ${bright})`;
+                    ctx.fill();
+                }
+            }
+
+            drawNodes(nn.input_nodes, layerX[0], visInput, false);
+            drawNodes(nn.hidden_nodes, layerX[1], visResult.hidden, true);
+            drawNodes(nn.output_nodes, layerX[2], visResult.output, false);
+        }
+
+        // === LOOP DE INTELIGÊNCIA ARTIFICIAL ===
+        function animate() {
+            if (dataset && dataset.length > 0) {
+                let currentLoss = 0;
+
+                // Treina em lote
+                for (let k = 0; k < 50; k++) {
+                    let d = dataset[Math.floor(Math.random() * dataset.length)];
+                    nn.train(d.i, d.t);
+                    if (k === 0) {
+                        let out = nn.feedForward(d.i).output;
+                        let tIdx = d.t.indexOf(1);
+                        currentLoss = 1 - out[tIdx];
+                    }
+                }
+                epoch += 50;
+
+                // LÓGICA DE CRESCIMENTO (AUTO-GROWTH)
+                // Se a perda atual não for significativamente melhor que a melhor perda registrada
+                if (currentLoss >= lastBestLoss - 0.001 && currentLoss > 0.1) {
+                    stagnationCounter++;
+                } else {
+                    // Se melhorou, zera a contagem e atualiza o recorde
+                    stagnationCounter = 0;
+                    lastBestLoss = currentLoss;
+                }
+
+                // Se a frustração encheu a barra
+                if (stagnationCounter > PATIENCE_LIMIT) {
+                    nn.addHiddenNeuron(); // CRESCE O CÉREBRO
+                    stagnationCounter = 0; // Reseta paciência
+                    lastBestLoss = currentLoss; // Reseta expectativa
+
+                    // Feedback Visual
+                    let log = document.getElementById('growthLog');
+                    log.innerHTML += `<div>+ Neurônio (Total: ${nn.hidden_nodes})</div>`;
+                    // Remove logs antigos
+                    if (log.children.length > 5) log.removeChild(log.firstChild);
+                }
+
+                // Atualiza UI
+                document.getElementById('epochDisplay').innerText = epoch;
+                document.getElementById('lossDisplay').innerText = currentLoss.toFixed(4);
+                document.getElementById('neuronCount').innerText = nn.hidden_nodes;
+
+                let patiencePercent = (stagnationCounter / PATIENCE_LIMIT) * 100;
+                document.getElementById('patienceBar').style.width = `${patiencePercent}%`;
+            }
+
+            drawNetwork();
+            requestAnimationFrame(animate);
+        }
+
+        setTimeout(() => { resizeCanvas(); restartNetwork(); animate(); }, 500);
+
+    </script>
