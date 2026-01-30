@@ -1,6 +1,4 @@
-Perfeito. Li o HTML inteiro e vou te devolver um README claro, técnico e honesto, explicando o que é, como funciona, por que funciona e quais são os limites desse experimento.
-
-⸻
+[PT-BR]
 
 🧠 Rede Neural Evolutiva (Auto-Growth)
 
