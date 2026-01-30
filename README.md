@@ -198,9 +198,8 @@ Possíveis melhorias:
 
 ⸻
 
-[EN]
 
-⸻
+[EN]
 
 🧠 Evolutionary Neural Network (Auto-Growth)
 
