@@ -76,7 +76,7 @@ Classe `TextProcessor`:
 #### 2️⃣ Rede Neural
 Classe `NeuralNetwork`:
 - Feedforward clássico
-- Função de ativação sigmoide
+- Sigmoide na camada oculta e softmax na saída
 - Backpropagation manual
 - Taxa de aprendizado fixa
 - Sem regularização ou normalização
@@ -140,10 +140,10 @@ Limitações esperadas:
 ---
 
 ### ▶️ Como Executar
-1. Salve o arquivo como `index.html`
-2. Abra em um navegador moderno
-3. Observe a rede aprender e crescer
-4. Modifique o corpus para novos testes
+1. Mantenha `index.html`, `styles.css` e `app.js` na mesma pasta
+2. Abra `index.html` em um navegador moderno (ou sirva a pasta com um servidor HTTP estático)
+3. Observe a rede aprender e crescer; use **Pausar** para inspecionar o estado
+4. Modifique o corpus, mantendo pelo menos duas palavras, e reinicie a rede
 
 ---
 
@@ -190,7 +190,7 @@ Output (Next Word)
 ### 🧠 Internal Design
 - One-hot text encoding
 - Manual matrix math
-- Sigmoid activations
+- Sigmoid hidden activations and softmax output
 - Dynamic hidden-layer expansion when loss plateaus
 
 ---
@@ -228,9 +228,9 @@ Output (Next Word)
 ---
 
 ### ▶️ How to Run
-1. Save as `index.html`
-2. Open in a modern browser
-3. Watch the network learn and evolve
+1. Keep `index.html`, `styles.css`, and `app.js` in the same directory
+2. Open `index.html` in a modern browser (or serve the directory through a static HTTP server)
+3. Watch the network learn and evolve; use **Pause** to inspect its state
 
 ---
 
