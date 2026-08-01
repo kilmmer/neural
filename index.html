@@ -22,7 +22,7 @@
           <h2 id="training-title">Treinamento</h2>
         </div>
         <label for="corpusText">Corpus de texto</label>
-        <textarea id="corpusText" spellcheck="false">o rato roeu a roupa do rei de roma e a rainha de raiva roeu o resto</textarea>
+        <textarea id="corpusText" spellcheck="false" placeholder="Cole aqui o texto que a rede deve aprender..."></textarea>
         <p class="field-hint">Use ao menos duas palavras. O modo didático avança um passo a cada 0,26 s.</p>
         <div class="button-row">
           <button id="restartButton" class="button button-secondary" type="button">Reiniciar rede</button>
@@ -40,6 +40,7 @@
           <div><dt>Épocas</dt><dd id="epochDisplay">0</dd></div>
           <div><dt>Loss média</dt><dd id="lossDisplay">—</dd></div>
           <div><dt>Neurônios ocultos</dt><dd id="neuronCount">—</dd></div>
+          <div><dt>Camadas ocultas</dt><dd id="layerCount">—</dd></div>
         </dl>
         <div class="stagnation">
           <div><span>Estagnação</span><span id="stagnationDisplay">0%</span></div>
@@ -53,9 +54,9 @@
           <h2 id="generate-title">Gerar sequência</h2>
         </div>
         <label for="seedWord">Palavra inicial</label>
-        <input id="seedWord" type="text" value="o" autocomplete="off">
+        <input id="seedWord" type="text" placeholder="Digite uma palavra do corpus" autocomplete="off">
         <button id="generateButton" class="button button-primary" type="button">Gerar texto</button>
-        <output id="generatedText" class="generated-text" aria-live="polite">Aguardando treinamento.</output>
+        <output id="generatedText" class="generated-text" aria-live="polite">Insira um corpus e inicie o treinamento.</output>
       </section>
     </aside>
 

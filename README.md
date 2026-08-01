@@ -25,7 +25,7 @@ Demonstrar de forma clara e interativa:
 - Funcionamento de uma **rede neural feedforward**
 - Treinamento via **backpropagation**
 - Identificação de **estagnação de aprendizado**
-- Crescimento estrutural automático da rede (**auto-growth**)
+- Crescimento estrutural automático da rede (**auto-growth**) de neurônios e camadas
 
 ---
 
@@ -33,7 +33,7 @@ Demonstrar de forma clara e interativa:
 
 Entrada (One-Hot Words)
 ↓
-Camada Oculta (dinâmica)
+Camadas Ocultas (dinâmicas)
 ↓
 Saída (Próxima Palavra)
 
@@ -51,7 +51,7 @@ Saída (Próxima Palavra)
 - Métricas em tempo real:
   - Epochs
   - Erro atual (loss)
-  - Quantidade de neurônios ocultos
+  - Quantidade de neurônios e camadas ocultas
   - Indicador de estagnação (frustração)
 
 #### Coluna Direita — Visualização Neural
@@ -191,7 +191,7 @@ Output (Next Word)
 - One-hot text encoding
 - Manual matrix math
 - Sigmoid hidden activations and softmax output
-- Dynamic hidden-layer expansion when loss plateaus
+- Dynamic hidden-neuron and hidden-layer expansion when loss plateaus
 
 ---
 
