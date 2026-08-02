@@ -153,6 +153,9 @@ input, select { padding: 9px 10px; }
 .progress-bar { height: 5px; margin-top: 6px; overflow: hidden; border-radius: 3px; background: var(--surface-alt); }
 .progress-fill { width: 0; height: 100%; background: var(--warning); transition: width .2s; }
 .metric-note { margin: 7px 0 0; color: var(--muted); font-size: .7rem; }
+.early-stop-status { margin-top: 9px; padding-top: 7px; border-top: 1px solid var(--line); }
+.early-stop-status p { display: flex; justify-content: space-between; margin: 3px 0; color: var(--muted); font-size: .68rem; }
+.early-stop-status strong { color: var(--text); font-variant-numeric: tabular-nums; }
 
 .generated-text { display: block; min-height: 45px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); }
 .generated-word { font-weight: 750; }

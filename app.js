@@ -590,6 +590,8 @@ const elements = {
   stagnation: document.querySelector('#stagnationDisplay'),
   bar: document.querySelector('#patienceBar'),
   growthRule: document.querySelector('#growthRule'),
+  mlpStopStatus: document.querySelector('#mlpStopStatus'),
+  transformerStopStatus: document.querySelector('#transformerStopStatus'),
   generated: document.querySelector('#generatedText'),
   generatorModel: document.querySelector('#generatorModel'),
   temperature: document.querySelector('#temperatureSelect'),
@@ -629,6 +631,9 @@ const config = {
   maxVisualNodesPerLayer: 56,
   drawInterval: 33,
   workerBatchSize: 8,
+  earlyStopPatience: 8,
+  earlyStopMaxPasses: 100,
+  earlyStopMinDelta: 0.002,
 };
 
 function initialHiddenWidth(vocabSize) {
@@ -680,6 +685,9 @@ let attentionEvaluatedTrainLoss = null;
 let lossHistory = [];
 let growthHistory = [];
 let lastGrowthEpoch = 0;
+const freshStopState = () => ({ bestLoss: Infinity, patience: 0, lastEvaluationStep: 0, passes: 0, stopped: false, reason: '', bestModel: null, growthEvents: 0 });
+let mlpStop = freshStopState();
+let transformerStop = freshStopState();
 const STORAGE_KEY = 'neural-lab-model-v2';
 const SESSION_KEY = 'neural-lab-live-session-v2';
 
@@ -774,6 +782,8 @@ function updateMetrics() {
   elements.mlpTestLoss.textContent = mlpTestLoss === null ? '—' : mlpTestLoss.toFixed(3);
   elements.attentionTrainLoss.textContent = attentionEvaluatedTrainLoss === null ? '—' : attentionEvaluatedTrainLoss.toFixed(3);
   elements.attentionTestLoss.textContent = attentionTestLoss === null ? '—' : attentionTestLoss.toFixed(3);
+  elements.mlpStopStatus.textContent = mlpStop.stopped ? `Parou · ${mlpStop.reason}` : `${mlpStop.patience} / ${config.earlyStopPatience}`;
+  elements.transformerStopStatus.textContent = transformerStop.stopped ? `Parou · ${transformerStop.reason}` : `${transformerStop.patience} / ${config.earlyStopPatience}`;
   elements.stagnation.textContent = `${stagnation} / ${config.patienceLimit}`;
   elements.bar.style.width = `${Math.min(100, stagnation / config.patienceLimit * 100)}%`;
   updateGrowthExplanation();
@@ -869,7 +879,7 @@ function ensureTransformerWorker() {
 }
 
 function queueTransformerTraining() {
-  if (paused || transformerBusy || !ensureTransformerWorker() || !dataset.length) return;
+  if (paused || transformerStop.stopped || transformerBusy || !ensureTransformerWorker() || !dataset.length) return;
   transformerBusy = true;
   const roundId = ++transformerWorkerRound;
   const batchSize = processor.vocabSize > 512 ? 4 : 8;
@@ -884,6 +894,7 @@ function queueTransformerTraining() {
       transformerEpoch += message.trainedSteps;
       attentionLoss = attentionLoss === null ? message.meanLoss : attentionLoss * 0.85 + message.meanLoss * 0.15;
       if (message.model) attentionNetwork = AttentionNetwork.restore(message.model);
+      if (message.model) evaluateEarlyStopping('transformer');
       updateMetrics();
       if (!paused) setTimeout(queueTransformerTraining, 0);
     } else {
@@ -1014,6 +1025,8 @@ function prepareCorpus() {
   lossHistory = [];
   growthHistory = [];
   lastGrowthEpoch = 0;
+  mlpStop = freshStopState();
+  transformerStop = freshStopState();
   stepsSinceEvaluation = 0;
   paused = true;
   visualInput = null;
@@ -1150,6 +1163,70 @@ function crossEntropy(model, samples, kind, limit = 32) {
   return count ? total / count : null;
 }
 
+function mlpArchitectureAtLimit() {
+  if (!network) return true;
+  const capacity = hiddenLayerCapacity(network.lastHiddenIndex);
+  return !network.canAddNeuron(capacity) && network.hiddenLayerCount >= config.maxHiddenLayers;
+}
+
+function finishModelTraining(kind, reason) {
+  const state = kind === 'mlp' ? mlpStop : transformerStop;
+  if (state.stopped) return;
+  state.stopped = true;
+  state.reason = reason;
+  if (state.bestModel) {
+    if (kind === 'mlp') network = restoreMlp(state.bestModel);
+    else attentionNetwork = AttentionNetwork.restore(state.bestModel);
+  }
+  if (kind === 'mlp') stopWorkers();
+  else stopTransformerWorker();
+  addGrowthEvent(`${kind === 'mlp' ? 'MLP' : 'Transformer'} finalizado · melhor estado restaurado`);
+  if (mlpStop.stopped && transformerStop.stopped) {
+    paused = true;
+    updateTrainingButton();
+    setStatus('Treinamento concluído: os dois modelos restauraram seus melhores parâmetros de teste.');
+    setLesson('Early stopping concluído', 'A inferência agora usa os melhores estados observados, não necessariamente os últimos estados treinados.');
+  }
+  updateMetrics();
+  markRenderDirty();
+}
+
+function evaluateEarlyStopping(kind) {
+  if (!dataset.length || !testDataset.length) return;
+  const isMlp = kind === 'mlp';
+  const state = isMlp ? mlpStop : transformerStop;
+  const steps = isMlp ? epoch : transformerEpoch;
+  if (state.stopped || steps - state.lastEvaluationStep < dataset.length) return;
+  state.lastEvaluationStep = steps;
+  state.passes = Math.floor(steps / dataset.length);
+  const model = isMlp ? network : attentionNetwork;
+  const loss = crossEntropy(model, testDataset, isMlp ? 'mlp' : 'attention');
+  if (!Number.isFinite(loss)) {
+    finishModelTraining(kind, 'loss inválida');
+    return;
+  }
+
+  if (isMlp && state.growthEvents !== growthHistory.length) {
+    state.growthEvents = growthHistory.length;
+    state.bestLoss = loss;
+    state.bestModel = serializeNetwork();
+    state.patience = 0;
+    return;
+  }
+
+  if (loss < state.bestLoss - config.earlyStopMinDelta) {
+    state.bestLoss = loss;
+    state.bestModel = isMlp ? serializeNetwork() : attentionNetwork.serialize();
+    state.patience = 0;
+  } else state.patience++;
+
+  if (state.passes >= config.earlyStopMaxPasses) {
+    finishModelTraining(kind, `${config.earlyStopMaxPasses} passagens`);
+  } else if (state.patience >= config.earlyStopPatience) {
+    if (!isMlp || mlpArchitectureAtLimit()) finishModelTraining(kind, `${config.earlyStopPatience} sem melhora`);
+  }
+}
+
 function recordHistory(evaluated = false) {
   if (!network || !attentionNetwork || !evaluated) return;
   attentionEvaluatedTrainLoss = crossEntropy(attentionNetwork, dataset, 'attention');
@@ -1219,29 +1296,41 @@ function finishTrainingSteps(completedSteps) {
     evaluated = true;
   }
   recordHistory(evaluated);
+  evaluateEarlyStopping('mlp');
+  if (requestedWorkerCount === 1) evaluateEarlyStopping('transformer');
   updateMetrics();
 }
 
 function performTrainingStep() {
   if (!network) return;
   const sample = dataset[Math.floor(Math.random() * dataset.length)];
-  const input = processor.indexToVector(sample.inputIndex);
-  const target = processor.indexToVector(sample.targetIndex);
-  visualInput = input;
-  const beforeTraining = network.feedForward(input).output;
-  const prediction = processor.vectorToWord(beforeTraining);
-  updateLossEstimate(-Math.log(Math.max(beforeTraining[sample.targetIndex], 1e-12)));
-  network.train(input, target);
-  const attentionBefore = attentionNetwork.train(sample.contextIndices, sample.targetIndex).output;
-  const sampleAttentionLoss = -Math.log(Math.max(attentionBefore[sample.targetIndex], 1e-12));
-  attentionLoss = attentionLoss === null ? sampleAttentionLoss : attentionLoss * 0.9 + sampleAttentionLoss * 0.1;
-  transformerEpoch++;
-  updateLearningPanel(sample, prediction);
-  finishTrainingSteps(1);
+  let completedMlpSteps = 0;
+  if (!mlpStop.stopped) {
+    const input = processor.indexToVector(sample.inputIndex);
+    const target = processor.indexToVector(sample.targetIndex);
+    visualInput = input;
+    const beforeTraining = network.feedForward(input).output;
+    const prediction = processor.vectorToWord(beforeTraining);
+    updateLossEstimate(-Math.log(Math.max(beforeTraining[sample.targetIndex], 1e-12)));
+    network.train(input, target);
+    updateLearningPanel(sample, prediction);
+    completedMlpSteps = 1;
+  }
+  if (!transformerStop.stopped) {
+    const attentionBefore = attentionNetwork.train(sample.contextIndices, sample.targetIndex).output;
+    const sampleAttentionLoss = -Math.log(Math.max(attentionBefore[sample.targetIndex], 1e-12));
+    attentionLoss = attentionLoss === null ? sampleAttentionLoss : attentionLoss * 0.9 + sampleAttentionLoss * 0.1;
+    transformerEpoch++;
+  }
+  finishTrainingSteps(completedMlpSteps);
 }
 
 async function performParallelRound() {
   if (!network || parallelBusy) return false;
+  if (mlpStop.stopped) {
+    queueTransformerTraining();
+    return true;
+  }
   if (!ensureWorkerPool()) {
     performTrainingStep();
     return true;
@@ -1297,10 +1386,14 @@ function ensureNetwork() {
 
 function startTraining() {
   if (!ensureNetwork()) return;
+  if (mlpStop.stopped && transformerStop.stopped) {
+    setStatus('Os dois modelos já concluíram o early stopping. Reinicie para treinar novamente.');
+    return;
+  }
   paused = false;
   lastTrainingAt = performance.now();
   updateTrainingButton();
-  queueTransformerTraining();
+  if (!transformerStop.stopped) queueTransformerTraining();
   setStatus('Treinamento em execução. Pause para inspecionar com calma.');
 }
 
@@ -1322,7 +1415,10 @@ async function stepTraining() {
 function trainFrame(now) {
   if (!network || paused || now - lastTrainingAt < config.trainingInterval) return;
   lastTrainingAt = now;
-  if (requestedWorkerCount > 1) void performParallelRound();
+  if (requestedWorkerCount > 1) {
+    if (!mlpStop.stopped) void performParallelRound();
+    else queueTransformerTraining();
+  }
   else performTrainingStep();
 }
 
@@ -1404,6 +1500,10 @@ function createSnapshot() {
     metrics: { epoch, transformerEpoch, bestLoss, displayedLoss, attentionLoss, mlpTestLoss, attentionTestLoss, mlpEvaluatedTrainLoss, attentionEvaluatedTrainLoss, stagnation, lastGrowthEpoch },
     history: lossHistory,
     growthHistory,
+    earlyStopping: {
+      mlp: { ...mlpStop, bestModel: null },
+      transformer: { ...transformerStop, bestModel: null },
+    },
     mlp: serializeNetwork(),
     attention: attentionNetwork.serialize(),
   };
@@ -1427,6 +1527,8 @@ function applySnapshot(snapshot, options = {}) {
   ({ epoch = 0, transformerEpoch = 0, bestLoss = Infinity, displayedLoss = null, attentionLoss = null, mlpTestLoss = null, attentionTestLoss = null, mlpEvaluatedTrainLoss = null, attentionEvaluatedTrainLoss = null, stagnation = 0, lastGrowthEpoch = 0 } = snapshot.metrics || {});
   lossHistory = Array.isArray(snapshot.history) ? snapshot.history : [];
   growthHistory = Array.isArray(snapshot.growthHistory) ? snapshot.growthHistory : [];
+  mlpStop = Object.assign(freshStopState(), snapshot.earlyStopping?.mlp, { bestModel: serializeNetwork() });
+  transformerStop = Object.assign(freshStopState(), snapshot.earlyStopping?.transformer, { bestModel: attentionNetwork.serialize() });
   visualInput = processor.indexToVector(dataset[0].inputIndex);
   paused = true;
   formationStartedAt = 0;
@@ -1437,7 +1539,7 @@ function applySnapshot(snapshot, options = {}) {
   setStatus(`Modelo carregado na época ${epoch.toLocaleString('pt-BR')}. O treinamento permanece pausado.`);
   setLesson('Estado restaurado', 'Corpus, vocabulário, duas arquiteturas, pesos, embeddings, métricas e histórico voltaram ao ponto salvo.');
 
-  if (options.resume) {
+  if (options.resume && !(mlpStop.stopped && transformerStop.stopped)) {
     paused = false;
     lastTrainingAt = performance.now();
     updateTrainingButton();
