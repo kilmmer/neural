@@ -208,6 +208,8 @@ const elements = {
   pause: document.querySelector('#pauseButton'),
   step: document.querySelector('#stepButton'),
   speed: document.querySelector('#speedSelect'),
+  execution: document.querySelector('#executionMode'),
+  workerStatus: document.querySelector('#workerStatus'),
   generate: document.querySelector('#generateButton'),
   theme: document.querySelector('#themeToggle'),
   seed: document.querySelector('#seedWord'),
@@ -216,6 +218,7 @@ const elements = {
   loss: document.querySelector('#lossDisplay'),
   neurons: document.querySelector('#neuronCount'),
   layers: document.querySelector('#layerCount'),
+  workers: document.querySelector('#workerCount'),
   stagnation: document.querySelector('#stagnationDisplay'),
   bar: document.querySelector('#patienceBar'),
   growthRule: document.querySelector('#growthRule'),
@@ -236,7 +239,7 @@ const ctx = elements.canvas.getContext('2d');
 const config = {
   trainingInterval: 400,
   evaluationEvery: 8,
-  patienceLimit: 12,
+  patienceLimit: 8,
   improvementDelta: 0.002,
   targetLoss: 0.08,
   maxNeuronsPerLayer: 8,
@@ -260,6 +263,11 @@ let growthAnimation = null;
 let neuronHitAreas = [];
 let selectedNeuron = null;
 let selectedNeuronEpoch = -1;
+let workerPool = [];
+let requestedWorkerCount = 1;
+let workerRoundId = 0;
+let parallelBusy = false;
+let stepsSinceEvaluation = 0;
 
 function cssColor(name) {
   return getComputedStyle(document.body).getPropertyValue(name).trim();
@@ -313,7 +321,7 @@ function resetNeuronDetails() {
 
 function updateGrowthExplanation() {
   if (!network) {
-    elements.growthRule.textContent = 'A rede cresce após 12 avaliações sem melhora.';
+    elements.growthRule.textContent = 'A rede cresce após 8 avaliações sem melhora.';
     return;
   }
   if (displayedLoss !== null && displayedLoss <= config.targetLoss) {
@@ -329,9 +337,112 @@ function updateMetrics() {
   elements.loss.textContent = displayedLoss === null ? '—' : displayedLoss.toFixed(4);
   elements.neurons.textContent = network?.hiddenNodes ?? '—';
   elements.layers.textContent = network?.hiddenLayerCount ?? '—';
+  elements.workers.textContent = workerPool.length;
   elements.stagnation.textContent = `${stagnation} / ${config.patienceLimit}`;
   elements.bar.style.width = `${Math.min(100, stagnation / config.patienceLimit * 100)}%`;
   updateGrowthExplanation();
+}
+
+function serializeNetwork() {
+  return {
+    layerSizes: [...network.layerSizes],
+    learningRate: network.learningRate,
+    weights: network.weights.map(matrix => matrix.data.map(row => [...row])),
+    biases: network.biases.map(matrix => matrix.data.map(row => [...row])),
+  };
+}
+
+function applyAveragedNetworks(states) {
+  network.weights.forEach((matrix, matrixIndex) => {
+    matrix.data = matrix.data.map((row, rowIndex) => row.map((_, colIndex) => (
+      states.reduce((sum, state) => sum + state.weights[matrixIndex][rowIndex][colIndex], 0)
+      / states.length
+    )));
+  });
+  network.biases.forEach((matrix, matrixIndex) => {
+    matrix.data = matrix.data.map((row, rowIndex) => row.map((_, colIndex) => (
+      states.reduce((sum, state) => sum + state.biases[matrixIndex][rowIndex][colIndex], 0)
+      / states.length
+    )));
+  });
+}
+
+function stopWorkers() {
+  workerRoundId++;
+  workerPool.forEach(worker => worker.terminate());
+  workerPool = [];
+  parallelBusy = false;
+  updateMetrics();
+}
+
+function fallbackToLocal(message) {
+  stopWorkers();
+  requestedWorkerCount = 1;
+  elements.execution.value = '1';
+  elements.step.textContent = 'Avançar 1 passo';
+  elements.workerStatus.textContent = message;
+}
+
+function ensureWorkerPool() {
+  if (requestedWorkerCount === 1) return true;
+  if (workerPool.length === requestedWorkerCount) return true;
+  stopWorkers();
+
+  if (typeof Worker === 'undefined') {
+    fallbackToLocal('Web Workers não estão disponíveis; usando a thread principal.');
+    return false;
+  }
+
+  try {
+    workerPool = Array.from({ length: requestedWorkerCount }, (_, workerId) => {
+      const worker = new Worker('trainer-worker.js');
+      worker.postMessage({ type: 'init', workerId, dataset });
+      return worker;
+    });
+    elements.workerStatus.textContent = `${requestedWorkerCount} workers treinam em paralelo; a interface permanece na thread principal.`;
+    updateMetrics();
+    return true;
+  } catch {
+    fallbackToLocal('Não foi possível iniciar workers; use um servidor HTTP local.');
+    return false;
+  }
+}
+
+function requestWorkerTraining(worker, workerId, roundId, sampleIndex, state) {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => finish(new Error('Tempo limite do worker excedido.')), 8000);
+    const onMessage = event => {
+      const message = event.data;
+      if (message.roundId !== roundId || message.workerId !== workerId) return;
+      if (message.type === 'error') finish(new Error(message.message));
+      else if (message.type === 'trained') finish(null, message);
+    };
+    const onError = event => finish(new Error(event.message || 'Falha no worker.'));
+    const finish = (error, result) => {
+      clearTimeout(timeout);
+      worker.removeEventListener('message', onMessage);
+      worker.removeEventListener('error', onError);
+      if (error) reject(error); else resolve(result);
+    };
+    worker.addEventListener('message', onMessage);
+    worker.addEventListener('error', onError);
+    worker.postMessage({ type: 'train', workerId, roundId, sampleIndex, network: state });
+  });
+}
+
+function configureExecutionMode() {
+  requestedWorkerCount = Number(elements.execution.value);
+  stopWorkers();
+  if (requestedWorkerCount === 1) {
+    elements.step.textContent = 'Avançar 1 passo';
+    elements.workerStatus.textContent = 'Treinamento e interface compartilham a thread principal.';
+  } else {
+    elements.step.textContent = 'Avançar 1 rodada';
+    elements.workerStatus.textContent = `${requestedWorkerCount} workers serão iniciados junto com a rede.`;
+  }
+  setLesson('Modo de execução alterado', requestedWorkerCount === 1
+    ? 'No modo local, treinamento e desenho dividem a mesma thread.'
+    : `No modo paralelo, ${requestedWorkerCount} cópias treinam simultaneamente e seus pesos são combinados pela média.`);
 }
 
 function prepareCorpus() {
@@ -343,11 +454,13 @@ function prepareCorpus() {
   bestLoss = Infinity;
   displayedLoss = null;
   stagnation = 0;
+  stepsSinceEvaluation = 0;
   paused = true;
   visualInput = null;
   lastTrainingAt = 0;
   growthAnimation = null;
   neuronHitAreas = [];
+  stopWorkers();
   elements.growthLog.replaceChildren();
   elements.generated.textContent = 'Insira um corpus e inicie o treinamento.';
   resetLearningPanel();
@@ -451,6 +564,17 @@ function updateLearningPanel(sample, prediction) {
   }
 }
 
+function finishTrainingSteps(completedSteps) {
+  epoch += completedSteps;
+  stepsSinceEvaluation += completedSteps;
+  if (stepsSinceEvaluation >= config.evaluationEvery) {
+    stepsSinceEvaluation %= config.evaluationEvery;
+    displayedLoss = evaluateLoss();
+    updateGrowth(displayedLoss);
+  }
+  updateMetrics();
+}
+
 function performTrainingStep() {
   if (!network) return;
   const sample = dataset[Math.floor(Math.random() * dataset.length)];
@@ -458,14 +582,43 @@ function performTrainingStep() {
   const beforeTraining = network.feedForward(sample.input).output;
   const prediction = processor.vectorToWord(beforeTraining);
   network.train(sample.input, sample.target);
-  epoch++;
   updateLearningPanel(sample, prediction);
+  finishTrainingSteps(1);
+}
 
-  if (epoch % config.evaluationEvery === 0) {
-    displayedLoss = evaluateLoss();
-    updateGrowth(displayedLoss);
+async function performParallelRound() {
+  if (!network || parallelBusy) return false;
+  if (!ensureWorkerPool()) {
+    performTrainingStep();
+    return true;
   }
-  updateMetrics();
+
+  parallelBusy = true;
+  const roundId = ++workerRoundId;
+  const state = serializeNetwork();
+  const sampleIndexes = workerPool.map((_, workerId) => (epoch + workerId) % dataset.length);
+
+  try {
+    const results = await Promise.all(workerPool.map((worker, workerId) => (
+      requestWorkerTraining(worker, workerId, roundId, sampleIndexes[workerId], state)
+    )));
+    if (roundId !== workerRoundId) return false;
+    applyAveragedNetworks(results.map(result => result.network));
+    const representative = results[0];
+    const sample = dataset[representative.sampleIndex];
+    visualInput = sample.input;
+    updateLearningPanel(sample, processor.vectorToWord(representative.prediction));
+    setLesson('Rodada paralela concluída', `${results.length} workers processaram exemplos simultaneamente. Os pesos resultantes foram combinados pela média.`);
+    finishTrainingSteps(results.length);
+    return true;
+  } catch (error) {
+    if (roundId !== workerRoundId) return false;
+    fallbackToLocal(`Falha no processamento paralelo: ${error.message}. Usando modo local.`);
+    performTrainingStep();
+    return true;
+  } finally {
+    if (roundId === workerRoundId) parallelBusy = false;
+  }
 }
 
 function ensureNetwork() {
@@ -487,18 +640,20 @@ function pauseTraining() {
   setStatus('Treinamento pausado. Você pode avançar um passo por vez.');
 }
 
-function stepTraining() {
+async function stepTraining() {
   if (!ensureNetwork()) return;
   paused = true;
   updateTrainingButton();
-  performTrainingStep();
-  setStatus(`Passo ${epoch} concluído.`);
+  if (requestedWorkerCount > 1) await performParallelRound();
+  else performTrainingStep();
+  setStatus(requestedWorkerCount > 1 ? `Rodada paralela concluída; ${epoch} exemplos processados.` : `Passo ${epoch} concluído.`);
 }
 
 function trainFrame(now) {
   if (!network || paused || now - lastTrainingAt < config.trainingInterval) return;
   lastTrainingAt = now;
-  performTrainingStep();
+  if (requestedWorkerCount > 1) void performParallelRound();
+  else performTrainingStep();
 }
 
 function generateStory() {
@@ -736,6 +891,7 @@ elements.speed.addEventListener('change', () => {
   config.trainingInterval = Number(elements.speed.value);
   setStatus(`Velocidade alterada para ${elements.speed.selectedOptions[0].text.toLocaleLowerCase('pt-BR')}.`);
 });
+elements.execution.addEventListener('change', configureExecutionMode);
 elements.generate.addEventListener('click', generateStory);
 elements.canvas.addEventListener('click', selectNeuron);
 elements.theme.addEventListener('click', () => {
@@ -744,6 +900,7 @@ elements.theme.addEventListener('click', () => {
   try { localStorage.setItem('neural-theme', theme); } catch { /* Preferência ficará apenas na sessão. */ }
 });
 window.addEventListener('resize', resizeCanvas);
+window.addEventListener('beforeunload', stopWorkers);
 
 applyTheme(getInitialTheme());
 resizeCanvas();

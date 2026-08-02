@@ -32,6 +32,8 @@
           <button id="stepButton" class="button button-secondary" type="button">Avançar 1 passo</button>
           <label class="speed-control" for="speedSelect"><span>Velocidade</span><select id="speedSelect"><option value="700">Lenta</option><option value="400" selected>Didática</option><option value="150">Rápida</option></select></label>
         </div>
+        <label class="execution-control" for="executionMode"><span>Execução</span><select id="executionMode"><option value="1" selected>Local · 1 thread</option><option value="2">Paralela · 2 workers</option><option value="4">Paralela · 4 workers</option></select></label>
+        <p id="workerStatus" class="worker-status">Treinamento e interface compartilham a thread principal.</p>
         <p id="statusMessage" class="status-message" role="status" aria-live="polite"></p>
       </section>
 
@@ -45,11 +47,12 @@
           <div><dt>Loss média</dt><dd id="lossDisplay">—</dd></div>
           <div><dt>Neurônios ocultos</dt><dd id="neuronCount">—</dd></div>
           <div><dt>Camadas ocultas</dt><dd id="layerCount">—</dd></div>
+          <div><dt>Workers ativos</dt><dd id="workerCount">0</dd></div>
         </dl>
         <div class="stagnation">
-          <div><span>Estagnação</span><span id="stagnationDisplay">0 / 12</span></div>
+          <div><span>Estagnação</span><span id="stagnationDisplay">0 / 8</span></div>
           <div class="progress-bar" aria-hidden="true"><div id="patienceBar" class="progress-fill"></div></div>
-          <p id="growthRule" class="metric-note">A rede cresce após 12 avaliações sem melhora.</p>
+          <p id="growthRule" class="metric-note">A rede cresce após 8 avaliações sem melhora.</p>
         </div>
       </section>
 

@@ -50,6 +50,7 @@ Saída (Próxima Palavra)
 - Reinício completo da rede
 - Treinamento contínuo ou avanço de **um passo por vez**
 - Controle de velocidade para observação didática
+- Execução local ou paralela com **2 ou 4 Web Workers**
 - Métricas em tempo real:
   - Epochs
   - Erro atual (loss)
@@ -100,6 +101,7 @@ Classe `NeuralNetwork`:
 - Treinamento por amostras aleatórias, com modo passo a passo
 - Atualização em tempo real da visualização e métricas
 - Pausa e retomada controladas pelo usuário
+- No modo paralelo, cada worker treina uma cópia e os parâmetros são agregados pela média
 
 ---
 
@@ -146,7 +148,7 @@ Limitações esperadas:
 
 ### ▶️ Como Executar
 1. Mantenha `index.html`, `styles.css` e `app.js` na mesma pasta
-2. Abra `index.html` em um navegador moderno (ou sirva a pasta com um servidor HTTP estático)
+2. Sirva a pasta com um servidor HTTP estático (necessário para o modo paralelo com Web Workers)
 3. Observe a rede aprender e crescer; use **Pausar** para inspecionar o estado
 4. Modifique o corpus, mantendo pelo menos duas palavras, e reinicie a rede
 
@@ -234,7 +236,7 @@ Output (Next Word)
 
 ### ▶️ How to Run
 1. Keep `index.html`, `styles.css`, and `app.js` in the same directory
-2. Open `index.html` in a modern browser (or serve the directory through a static HTTP server)
+2. Serve the directory through a static HTTP server (required for parallel Web Worker mode)
 3. Watch the network learn and evolve; use **Pause** to inspect its state
 
 ---

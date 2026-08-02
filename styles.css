@@ -133,6 +133,10 @@ input, select { padding: 9px 10px; }
 .speed-control { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; }
 .speed-control span { white-space: nowrap; font-size: .72rem; }
 .speed-control select { min-width: 0; padding: 7px; font-size: .74rem; }
+.execution-control { display: flex; align-items: center; gap: 8px; margin: 9px 0 0; }
+.execution-control span { min-width: 68px; font-size: .72rem; }
+.execution-control select { min-width: 0; padding: 7px; font-size: .74rem; }
+.worker-status { margin: 6px 0 0; color: var(--muted); font-size: .69rem; }
 .status-message { min-height: 1.3em; margin: 8px 0 0; color: var(--warning); font-size: .75rem; }
 
 .stats { margin: 0; }
