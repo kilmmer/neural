@@ -253,7 +253,6 @@ const config = {
   maxNeuronsPerLayer: 8,
   maxHiddenLayers: 3,
   newLayerSize: 4,
-  evaluationSampleLimit: 32,
   maxVisualNodesPerLayer: 56,
   drawInterval: 33,
 };
@@ -501,18 +500,10 @@ function prepareCorpus() {
   return true;
 }
 
-function evaluateLoss() {
-  const sampleLimit = Math.min(dataset.length, config.evaluationSampleLimit);
-  const stride = Math.max(1, Math.floor(dataset.length / sampleLimit));
-  let total = 0;
-  let evaluated = 0;
-  for (let index = 0; index < dataset.length && evaluated < sampleLimit; index += stride) {
-    const sample = dataset[index];
-    const output = network.feedForward(processor.indexToVector(sample.inputIndex)).output;
-    total -= Math.log(Math.max(output[sample.targetIndex], 1e-12));
-    evaluated++;
-  }
-  return total / evaluated;
+function updateLossEstimate(sampleLoss) {
+  displayedLoss = displayedLoss === null
+    ? sampleLoss
+    : displayedLoss * 0.9 + sampleLoss * 0.1;
 }
 
 function initializeNetwork() {
@@ -523,7 +514,8 @@ function initializeNetwork() {
   formationStartedAt = performance.now();
   animationUntil = formationStartedAt + 12000;
   markRenderDirty();
-  displayedLoss = evaluateLoss();
+  const initialOutput = network.feedForward(visualInput).output;
+  displayedLoss = -Math.log(Math.max(initialOutput[dataset[0].targetIndex], 1e-12));
   bestLoss = displayedLoss;
   updateMetrics();
   setLesson('Rede criada', `Arquitetura inicial: ${processor.vocabSize} entradas → ${initialHidden} neurônios ocultos → ${processor.vocabSize} saídas.`);
@@ -603,7 +595,6 @@ function finishTrainingSteps(completedSteps) {
   stepsSinceEvaluation += completedSteps;
   if (stepsSinceEvaluation >= config.evaluationEvery) {
     stepsSinceEvaluation %= config.evaluationEvery;
-    displayedLoss = evaluateLoss();
     updateGrowth(displayedLoss);
   }
   updateMetrics();
@@ -617,6 +608,7 @@ function performTrainingStep() {
   visualInput = input;
   const beforeTraining = network.feedForward(input).output;
   const prediction = processor.vectorToWord(beforeTraining);
+  updateLossEstimate(-Math.log(Math.max(beforeTraining[sample.targetIndex], 1e-12)));
   network.train(input, target);
   updateLearningPanel(sample, prediction);
   finishTrainingSteps(1);
@@ -643,7 +635,15 @@ async function performParallelRound() {
     const representative = results[0];
     const sample = dataset[representative.sampleIndex];
     visualInput = processor.indexToVector(sample.inputIndex);
-    updateLearningPanel(sample, processor.vectorToWord(representative.prediction));
+    const roundLoss = results.reduce((sum, result) => (
+      sum - Math.log(Math.max(result.targetProbability, 1e-12))
+    ), 0) / results.length;
+    updateLossEstimate(roundLoss);
+    updateLearningPanel(sample, {
+      word: processor.vocab[representative.predictionIndex],
+      confidence: representative.confidence,
+      index: representative.predictionIndex,
+    });
     setLesson('Rodada paralela concluída', `${results.length} workers processaram exemplos simultaneamente. Os pesos resultantes foram combinados pela média.`);
     finishTrainingSteps(results.length);
     return true;

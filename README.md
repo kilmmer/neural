@@ -103,7 +103,7 @@ Classe `NeuralNetwork`:
 - Pausa e retomada controladas pelo usuário
 - No modo paralelo, cada worker treina uma cópia e os parâmetros são agregados pela média
 - O dataset armazena índices compactos em vez de milhares de vetores one-hot duplicados
-- A avaliação de loss usa uma amostra representativa de até 32 pares
+- A loss usa média móvel das amostras já treinadas, sem varrer o corpus na thread principal
 - A visualização limita camadas grandes a 56 pontos e redesenha apenas quando necessário
 - Corpus limitado a 5.000 tokens para manter memória e resposta previsíveis
 
