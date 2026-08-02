@@ -34,6 +34,7 @@ Demonstrar de forma clara e interativa:
 - KV Cache por cabeça durante a geração do Tiny Transformer
 - Worker dedicado e contador de passos separado para o Tiny Transformer
 - Larguras adaptativas e diferentes por camada na MLP, calculadas a partir do dicionário
+- Tokenizer BPE treinado no corpus, com vocabulário 256/512/768 e tokens especiais
 
 O JSON inclui corpus, dicionário, pesos, biases, embeddings, posições, matrizes Q/K/V, feed-forward, métricas e histórico. Ele usa o formato educacional deste projeto e não é diretamente um arquivo TensorFlow ou PyTorch.
 

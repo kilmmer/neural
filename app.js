@@ -434,29 +434,108 @@ class AttentionNetwork {
 }
 
 const MAX_CORPUS_TOKENS = 5000;
-const MAX_DICTIONARY_SIZE = 768;
+const SPECIAL_TOKENS = ['<pad>', '<unk>', '<bos>', '<eos>'];
 
 class TextProcessor {
-  constructor(text) {
-    const parsedWords = text.toLocaleLowerCase('pt-BR').match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu) ?? [];
-    this.wasTruncated = parsedWords.length > MAX_CORPUS_TOKENS;
-    this.words = parsedWords.slice(0, MAX_CORPUS_TOKENS);
+  constructor(text, vocabularyLimit = 512) {
+    this.vocabularyLimit = vocabularyLimit;
+    const rawTokens = text.toLocaleLowerCase('pt-BR').match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*|[.!?,;:()[\]“”"…—-]/gu) ?? [];
+    const limitedRawTokens = rawTokens.slice(0, MAX_CORPUS_TOKENS);
+    this.wasTruncated = rawTokens.length > MAX_CORPUS_TOKENS;
     const frequencies = new Map();
-    this.words.forEach(word => frequencies.set(word, (frequencies.get(word) || 0) + 1));
-    this.corpusVocabulary = new Set(frequencies.keys());
-    const originalVocabulary = [...frequencies.keys()];
-    const rankedVocabulary = [...frequencies].sort((a, b) => b[1] - a[1]).map(([word]) => word);
-    this.vocabWasReduced = rankedVocabulary.length > MAX_DICTIONARY_SIZE;
-    this.vocab = this.vocabWasReduced
-      ? [...rankedVocabulary.slice(0, MAX_DICTIONARY_SIZE - 1), '<unk>']
-      : originalVocabulary;
+    limitedRawTokens.forEach(token => frequencies.set(token, (frequencies.get(token) || 0) + 1));
+    this.merges = [];
+    const isWord = token => /^[\p{L}\p{N}]/u.test(token);
+    const sequences = new Map([...frequencies].map(([token, frequency]) => [token, {
+      frequency,
+      symbols: isWord(token) ? [...token].map((character, index) => index === 0 ? `▁${character}` : character) : [token],
+    }]));
+    const fallbackCharacters = [...'abcdefghijklmnopqrstuvwxyzáàâãéêíóôõúüç0123456789'];
+    const symbols = new Set([
+      ...fallbackCharacters,
+      ...fallbackCharacters.map(character => `▁${character}`),
+      ...sequences.values().flatMap(item => item.symbols),
+    ]);
+
+    while (symbols.size + SPECIAL_TOKENS.length < vocabularyLimit) {
+      const pairs = new Map();
+      sequences.forEach(({ frequency, symbols: units }) => {
+        for (let index = 0; index < units.length - 1; index++) {
+          const key = `${units[index]}\u0000${units[index + 1]}`;
+          pairs.set(key, (pairs.get(key) || 0) + frequency);
+        }
+      });
+      if (!pairs.size) break;
+      let bestPair = '';
+      let bestFrequency = -1;
+      pairs.forEach((frequency, pair) => {
+        if (frequency > bestFrequency) {
+          bestPair = pair;
+          bestFrequency = frequency;
+        }
+      });
+      if (bestFrequency < 2) break;
+      const [left, right] = bestPair.split('\u0000');
+      const merged = left + right;
+      this.merges.push([left, right]);
+      symbols.add(merged);
+      sequences.forEach(item => { item.symbols = this.mergePair(item.symbols, left, right); });
+    }
+
+    this.vocab = [...SPECIAL_TOKENS, ...symbols].slice(0, vocabularyLimit);
     this.vocabSize = this.vocab.length;
-    this.wordIndex = new Map(this.vocab.map((word, index) => [word, index]));
-    this.unknownIndex = this.wordIndex.get('<unk>') ?? -1;
+    this.wordIndex = new Map(this.vocab.map((token, index) => [token, index]));
+    this.unknownIndex = this.wordIndex.get('<unk>');
+    this.padIndex = this.wordIndex.get('<pad>');
+    this.bosIndex = this.wordIndex.get('<bos>');
+    this.eosIndex = this.wordIndex.get('<eos>');
+    const encoded = ['<bos>'];
+    limitedRawTokens.forEach(token => {
+      encoded.push(...this.tokenizePiece(token));
+      if (/[.!?]/u.test(token)) encoded.push('<eos>', '<bos>');
+    });
+    if (encoded.at(-1) === '<bos>') encoded.pop();
+    if (encoded.at(-1) !== '<eos>') encoded.push('<eos>');
+    this.words = encoded.slice(0, MAX_CORPUS_TOKENS);
+    this.wasTruncated ||= encoded.length > MAX_CORPUS_TOKENS;
+    this.vocabWasReduced = true;
   }
 
+  mergePair(symbols, left, right) {
+    const merged = [];
+    for (let index = 0; index < symbols.length; index++) {
+      if (symbols[index] === left && symbols[index + 1] === right) {
+        merged.push(left + right);
+        index++;
+      } else merged.push(symbols[index]);
+    }
+    return merged;
+  }
+
+  tokenizePiece(token) {
+    let symbols = /^[\p{L}\p{N}]/u.test(token)
+      ? [...token].map((character, index) => index === 0 ? `▁${character}` : character)
+      : [token];
+    this.merges.forEach(([left, right]) => { symbols = this.mergePair(symbols, left, right); });
+    return symbols.map(symbol => this.wordIndex?.has(symbol) ? symbol : '<unk>');
+  }
+
+  tokenize(text) {
+    const rawTokens = text.toLocaleLowerCase('pt-BR').match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*|[.!?,;:()[\]“”"…—-]/gu) ?? [];
+    return rawTokens.flatMap(token => this.tokenizePiece(token));
+  }
+
+  encode(text) { return this.tokenize(text).map(token => this.indexForWord(token)); }
+
+  decode(indices) {
+    const text = indices.map(index => this.vocab[index]).filter(token => token && !SPECIAL_TOKENS.includes(token))
+      .join('').replaceAll('▁', ' ').trim();
+    return text.replace(/\s+([,.!?;:)\]])/gu, '$1').replace(/([(\[])\s+/gu, '$1');
+  }
+
+  displayToken(token) { return SPECIAL_TOKENS.includes(token) ? token : token.replace('▁', '▁'); }
+
   indexForWord(word) { return this.wordIndex.get(word) ?? this.unknownIndex; }
-  hasWord(word) { return this.corpusVocabulary.has(word); }
 
   wordToVector(word) {
     return this.indexToVector(this.indexForWord(word));
@@ -493,6 +572,7 @@ const elements = {
   speed: document.querySelector('#speedSelect'),
   execution: document.querySelector('#executionMode'),
   contextSize: document.querySelector('#contextSize'),
+  tokenizerSize: document.querySelector('#tokenizerSize'),
   maxLayers: document.querySelector('#maxLayers'),
   workerStatus: document.querySelector('#workerStatus'),
   generate: document.querySelector('#generateButton'),
@@ -914,7 +994,7 @@ function configureExecutionMode() {
 function prepareCorpus() {
   stopTransformerWorker();
   activeCorpus = elements.corpus.value;
-  processor = new TextProcessor(activeCorpus);
+  processor = new TextProcessor(activeCorpus, Number(elements.tokenizerSize.value));
   const allData = processor.generateData(Number(elements.contextSize.value));
   dataset = allData.filter((_, index) => index % 5 !== 4);
   testDataset = allData.filter((_, index) => index % 5 === 4);
@@ -955,8 +1035,8 @@ function prepareCorpus() {
     return false;
   }
   const truncationNotice = processor.wasTruncated ? ` Limite de ${MAX_CORPUS_TOKENS} tokens aplicado para proteger o navegador.` : '';
-  const dictionaryNotice = processor.vocabWasReduced ? ` Dicionário limitado a ${MAX_DICTIONARY_SIZE} tokens; palavras raras usam <unk>.` : '';
-  setStatus(`Corpus preparado: ${dataset.length} exemplos de treino, ${testDataset.length} de teste e ${processor.vocabSize} tokens no dicionário.${dictionaryNotice}${truncationNotice}`);
+  const dictionaryNotice = ` BPE aprendeu ${processor.merges.length} fusões e ${processor.vocabSize} tokens.`;
+  setStatus(`Corpus preparado: ${dataset.length} exemplos de treino e ${testDataset.length} de teste.${dictionaryNotice}${truncationNotice}`);
   setLesson('Corpus separado sem vazamento', `80% dos exemplos treinam os modelos; 20% ficam reservados para medir generalização usando até ${elements.contextSize.value} palavras de contexto.`);
   return true;
 }
@@ -1271,46 +1351,35 @@ function generateStory() {
     setStatus('Inicie a rede antes de gerar uma sequência.');
     return;
   }
-  const seedWords = elements.seed.value.toLocaleLowerCase('pt-BR').match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu) ?? [];
-  if (!seedWords.length || seedWords.some(word => !processor.hasWord(word))) {
-    setStatus('Todas as palavras do contexto inicial precisam existir no corpus.');
+  const seedIndices = processor.encode(elements.seed.value);
+  if (!seedIndices.length) {
+    setStatus('Digite ao menos uma palavra ou sinal de pontuação como contexto.');
     return;
   }
 
   elements.generated.replaceChildren();
-  const generated = [...seedWords];
+  const generatedIndices = [...seedIndices];
   const useTransformer = elements.generatorModel.value === 'attention';
   const kvCache = useTransformer ? attentionNetwork.createKVCache() : null;
   let transformerResult = null;
   if (useTransformer) {
-    seedWords.slice(-attentionNetwork.contextSize).forEach(word => {
-      transformerResult = attentionNetwork.forwardCached(processor.indexForWord(word), kvCache);
+    seedIndices.slice(-attentionNetwork.contextSize).forEach(tokenIndex => {
+      transformerResult = attentionNetwork.forwardCached(tokenIndex, kvCache);
     });
   }
-  seedWords.forEach(seed => {
-    const word = document.createElement('span');
-    word.className = 'generated-word seed';
-    word.textContent = `${seed} `;
-    elements.generated.append(word);
-  });
-  for (let index = 0; index < 15; index++) {
+  for (let index = 0; index < 24; index++) {
     const output = useTransformer
       ? transformerResult.output
-      : network.feedForward(processor.wordToVector(generated.at(-1))).output;
+      : network.feedForward(processor.indexToVector(generatedIndices.at(-1))).output;
     const generationOutput = [...output];
-    if (processor.unknownIndex >= 0) generationOutput[processor.unknownIndex] = 0;
-    const recentIndices = generated.map(word => processor.indexForWord(word));
-    const sampled = sampleNextWord(generationOutput, recentIndices, Number(elements.temperature.value));
-    const prediction = { word: processor.vocab[sampled.index], confidence: sampled.probability, index: sampled.index };
-    const word = document.createElement('span');
-    word.className = `generated-word ${prediction.confidence > 0.8 ? 'high' : 'low'}`;
-    word.textContent = `${prediction.word} `;
-    elements.generated.append(word);
-    generated.push(prediction.word);
-    if (useTransformer) transformerResult = attentionNetwork.forwardCached(prediction.index, kvCache);
+    [processor.padIndex, processor.unknownIndex, processor.bosIndex].forEach(tokenIndex => { generationOutput[tokenIndex] = 0; });
+    const sampled = sampleNextWord(generationOutput, generatedIndices, Number(elements.temperature.value));
+    if (sampled.index === processor.eosIndex) break;
+    generatedIndices.push(sampled.index);
+    if (useTransformer) transformerResult = attentionNetwork.forwardCached(sampled.index, kvCache);
   }
-  elements.generated.append('…');
-  visualInput = processor.wordToVector(seedWords.at(-1));
+  elements.generated.textContent = `${processor.decode(generatedIndices)} …`;
+  visualInput = processor.indexToVector(seedIndices.at(-1));
   markRenderDirty();
   setStatus(useTransformer
     ? `Sequência gerada com KV Cache; ${kvCache.indices.length} posições mantidas na janela.`
@@ -1324,6 +1393,8 @@ function createSnapshot() {
   if (!network || !attentionNetwork || !processor) throw new Error('Crie e treine a rede antes de salvar.');
   return {
     format: 'neural-lab-v2',
+    tokenizer: 'bpe-v1',
+    tokenizerSize: Number(elements.tokenizerSize.value),
     exportedAt: new Date().toISOString(),
     corpus: activeCorpus,
     contextSize: Number(elements.contextSize.value),
@@ -1339,10 +1410,11 @@ function createSnapshot() {
 }
 
 function applySnapshot(snapshot, options = {}) {
-  if (snapshot?.format !== 'neural-lab-v2' || !snapshot.corpus || !snapshot.mlp || !snapshot.attention) throw new Error('Arquivo incompatível ou incompleto.');
+  if (snapshot?.format !== 'neural-lab-v2' || snapshot.tokenizer !== 'bpe-v1' || !snapshot.corpus || !snapshot.mlp || !snapshot.attention) throw new Error('Arquivo incompatível: reinicie e salve um modelo com tokenizer BPE');
   stopWorkers();
   elements.corpus.value = snapshot.corpus;
   elements.contextSize.value = String(snapshot.contextSize || 3);
+  elements.tokenizerSize.value = String(snapshot.tokenizerSize || 512);
   const restoredLayerLimit = Number(snapshot.maxHiddenLayers);
   if ([3, 5, 8].includes(restoredLayerLimit)) {
     config.maxHiddenLayers = restoredLayerLimit;
@@ -1683,6 +1755,7 @@ elements.speed.addEventListener('change', () => {
 });
 elements.execution.addEventListener('change', configureExecutionMode);
 elements.contextSize.addEventListener('change', prepareCorpus);
+elements.tokenizerSize.addEventListener('change', prepareCorpus);
 elements.maxLayers.addEventListener('change', () => {
   config.maxHiddenLayers = Number(elements.maxLayers.value);
   stagnation = Math.min(stagnation, config.patienceLimit - 1);

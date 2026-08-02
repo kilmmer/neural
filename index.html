@@ -30,7 +30,12 @@
         <label for="corpusText">Corpus de texto</label>
         <textarea id="corpusText" spellcheck="false"
           placeholder="Cole aqui o texto que a rede deve aprender..."></textarea>
-        <p class="field-hint">Cada palavra ensina a rede a prever a palavra seguinte.</p>
+        <p class="field-hint">O BPE aprende subpalavras e ensina os modelos a prever o próximo token.</p>
+        <label class="execution-control" for="tokenizerSize"><span>BPE</span><select id="tokenizerSize">
+            <option value="256">256 tokens</option>
+            <option value="512" selected>512 tokens</option>
+            <option value="768">768 tokens</option>
+          </select></label>
         <label class="execution-control" for="contextSize"><span>Contexto</span><select id="contextSize">
             <option value="2">2 palavras</option>
             <option value="3" selected>3 palavras</option>
