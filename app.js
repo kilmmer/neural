@@ -317,6 +317,7 @@ const elements = {
   speed: document.querySelector('#speedSelect'),
   execution: document.querySelector('#executionMode'),
   contextSize: document.querySelector('#contextSize'),
+  maxLayers: document.querySelector('#maxLayers'),
   workerStatus: document.querySelector('#workerStatus'),
   generate: document.querySelector('#generateButton'),
   theme: document.querySelector('#themeToggle'),
@@ -364,10 +365,11 @@ const config = {
   improvementDelta: 0.002,
   targetLoss: 0.08,
   maxNeuronsPerLayer: 8,
-  maxHiddenLayers: 3,
+  maxHiddenLayers: 5,
   newLayerSize: 4,
   maxVisualNodesPerLayer: 56,
   drawInterval: 33,
+  workerBatchSize: 8,
 };
 
 let processor;
@@ -570,9 +572,9 @@ function ensureWorkerPool() {
   }
 }
 
-function requestWorkerTraining(worker, workerId, roundId, sampleIndex, state) {
+function requestWorkerTraining(worker, workerId, roundId, sampleIndexes, state) {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => finish(new Error('Tempo limite do worker excedido.')), 8000);
+    const timeout = setTimeout(() => finish(new Error('Tempo limite do worker excedido.')), 15000);
     const onMessage = event => {
       const message = event.data;
       if (message.roundId !== roundId || message.workerId !== workerId) return;
@@ -588,20 +590,36 @@ function requestWorkerTraining(worker, workerId, roundId, sampleIndex, state) {
     };
     worker.addEventListener('message', onMessage);
     worker.addEventListener('error', onError);
-    worker.postMessage({ type: 'train', workerId, roundId, sampleIndex, network: state });
+    worker.postMessage({ type: 'train', workerId, roundId, sampleIndexes, network: state });
   });
+}
+
+function recommendedWorkerCount() {
+  const logicalCores = Number(globalThis.navigator?.hardwareConcurrency) || 4;
+  return Math.max(1, Math.min(16, logicalCores - 1));
+}
+
+function workerBatchSize() {
+  if (!network) return config.workerBatchSize;
+  const parameterCount = network.weights.reduce((total, matrix) => total + matrix.rows * matrix.cols, 0);
+  if (parameterCount > 250000) return 2;
+  if (parameterCount > 100000) return 4;
+  return config.workerBatchSize;
 }
 
 function configureExecutionMode() {
   const selectedCount = Number(elements.execution.value);
-  requestedWorkerCount = [1, 2, 4].includes(selectedCount) ? selectedCount : 1;
+  requestedWorkerCount = [1, 2, 4, 8, 16].includes(selectedCount) ? selectedCount : 1;
   stopWorkers();
   if (requestedWorkerCount === 1) {
     elements.step.textContent = 'Avançar 1 passo';
     elements.workerStatus.textContent = 'Treinamento e interface compartilham a thread principal.';
   } else {
     elements.step.textContent = 'Avançar 1 rodada';
-    elements.workerStatus.textContent = `${requestedWorkerCount} workers serão iniciados junto com a rede.`;
+    const recommended = recommendedWorkerCount();
+    elements.workerStatus.textContent = requestedWorkerCount > recommended
+      ? `${requestedWorkerCount} workers selecionados; este dispositivo recomenda até ${recommended}. Mais workers podem reduzir o desempenho.`
+      : `${requestedWorkerCount} workers serão iniciados junto com a rede.`;
   }
   setLesson('Modo de execução alterado', requestedWorkerCount === 1
     ? 'No modo local, treinamento e desenho dividem a mesma thread.'
@@ -734,7 +752,7 @@ function updateGrowth(loss) {
     setLesson('Nova camada criada', message);
   } else {
     stagnation = config.patienceLimit;
-    elements.growthRule.textContent = 'Limite didático de arquitetura atingido.';
+    elements.growthRule.textContent = `Limite atual de ${config.maxHiddenLayers} camadas atingido. Você pode aumentá-lo nos controles.`;
     return;
   }
 
@@ -855,22 +873,24 @@ async function performParallelRound() {
   }
 
   parallelBusy = true;
+  const roundStartedAt = performance.now();
   const roundId = ++workerRoundId;
   const state = serializeNetwork();
-  const sampleIndexes = workerPool.map((_, workerId) => (epoch + workerId) % dataset.length);
+  const batchSize = workerBatchSize();
+  const sampleBatches = workerPool.map((_, workerId) => Array.from({ length: batchSize }, (_, offset) => (
+    (epoch + workerId * batchSize + offset) % dataset.length
+  )));
 
   try {
     const results = await Promise.all(workerPool.map((worker, workerId) => (
-      requestWorkerTraining(worker, workerId, roundId, sampleIndexes[workerId], state)
+      requestWorkerTraining(worker, workerId, roundId, sampleBatches[workerId], state)
     )));
     if (roundId !== workerRoundId) return false;
     applyAveragedNetworks(results.map(result => result.network));
     const representative = results[0];
     const sample = dataset[representative.sampleIndex];
     visualInput = processor.indexToVector(sample.inputIndex);
-    const roundLoss = results.reduce((sum, result) => (
-      sum - Math.log(Math.max(result.targetProbability, 1e-12))
-    ), 0) / results.length;
+    const roundLoss = results.reduce((sum, result) => sum + result.meanLoss, 0) / results.length;
     updateLossEstimate(roundLoss);
     results.forEach(result => {
       const attentionSample = dataset[result.sampleIndex];
@@ -883,8 +903,12 @@ async function performParallelRound() {
       confidence: representative.confidence,
       index: representative.predictionIndex,
     });
-    setLesson('Rodada paralela concluída', `${results.length} workers processaram exemplos simultaneamente. Os pesos resultantes foram combinados pela média.`);
-    finishTrainingSteps(results.length);
+    const completedSteps = results.reduce((sum, result) => sum + result.trainedSteps, 0);
+    const elapsedSeconds = Math.max(0.001, (performance.now() - roundStartedAt) / 1000);
+    const throughput = Math.round(completedSteps / elapsedSeconds);
+    elements.workerStatus.textContent = `${results.length} workers × ${batchSize} exemplos · ${throughput.toLocaleString('pt-BR')} exemplos/s na última rodada.`;
+    setLesson('Rodada paralela em lote', `${completedSteps} exemplos foram processados com apenas uma transferência de parâmetros por worker. Depois, os pesos foram combinados pela média.`);
+    finishTrainingSteps(completedSteps);
     return true;
   } catch (error) {
     if (roundId !== workerRoundId) return false;
@@ -997,6 +1021,7 @@ function createSnapshot() {
     exportedAt: new Date().toISOString(),
     corpus: activeCorpus,
     contextSize: Number(elements.contextSize.value),
+    maxHiddenLayers: config.maxHiddenLayers,
     vocabulary: processor.vocab,
     split: { strategy: '80/20 determinístico; cada quinto exemplo vai para teste', train: dataset.length, test: testDataset.length },
     metrics: { epoch, bestLoss, displayedLoss, attentionLoss, mlpTestLoss, attentionTestLoss, mlpEvaluatedTrainLoss, attentionEvaluatedTrainLoss, stagnation, lastGrowthEpoch },
@@ -1012,6 +1037,11 @@ function applySnapshot(snapshot, options = {}) {
   stopWorkers();
   elements.corpus.value = snapshot.corpus;
   elements.contextSize.value = String(snapshot.contextSize || 3);
+  const restoredLayerLimit = Number(snapshot.maxHiddenLayers);
+  if ([3, 5, 8].includes(restoredLayerLimit)) {
+    config.maxHiddenLayers = restoredLayerLimit;
+    elements.maxLayers.value = String(restoredLayerLimit);
+  }
   if (!prepareCorpus()) throw new Error('O corpus salvo não produz exemplos suficientes.');
   network = restoreMlp(snapshot.mlp);
   attentionNetwork = AttentionNetwork.restore(snapshot.attention);
@@ -1061,7 +1091,7 @@ function restoreSessionCheckpoint() {
     if (!saved) return false;
     const checkpoint = JSON.parse(saved);
     if (!checkpoint.snapshot) return false;
-    if ([1, 2, 4].includes(checkpoint.executionMode)) {
+    if ([1, 2, 4, 8, 16].includes(checkpoint.executionMode)) {
       elements.execution.value = String(checkpoint.executionMode);
       configureExecutionMode();
     }
@@ -1345,6 +1375,13 @@ elements.speed.addEventListener('change', () => {
 });
 elements.execution.addEventListener('change', configureExecutionMode);
 elements.contextSize.addEventListener('change', prepareCorpus);
+elements.maxLayers.addEventListener('change', () => {
+  config.maxHiddenLayers = Number(elements.maxLayers.value);
+  stagnation = Math.min(stagnation, config.patienceLimit - 1);
+  updateMetrics();
+  setStatus(`Limite alterado para ${config.maxHiddenLayers} camadas ocultas. A rede atual foi preservada.`);
+  setLesson('Profundidade liberada', `Se a loss continuar estagnada depois da adaptação, a rede poderá crescer até ${config.maxHiddenLayers} camadas ocultas.`);
+});
 elements.generate.addEventListener('click', generateStory);
 elements.save.addEventListener('click', saveModel);
 elements.load.addEventListener('click', loadModel);

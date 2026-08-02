@@ -135,22 +135,41 @@ self.addEventListener('message', event => {
   if (message.type !== 'train') return;
   try {
     const network = new WorkerNetwork(message.network);
-    const sample = trainingData[message.sampleIndex];
+    const sampleIndexes = Array.isArray(message.sampleIndexes) ? message.sampleIndexes : [message.sampleIndex];
     const input = Array(network.layerSizes[0]).fill(0);
     const target = Array(network.layerSizes.at(-1)).fill(0);
-    input[sample.inputIndex] = 1;
-    target[sample.targetIndex] = 1;
-    const before = network.forward(input).output.toArray();
-    const predictionIndex = before.reduce((best, value, index) => value > before[best] ? index : best, 0);
-    network.train(input, target);
+    let previousInput = -1;
+    let previousTarget = -1;
+    let lossTotal = 0;
+    let predictionIndex = 0;
+    let confidence = 0;
+
+    sampleIndexes.forEach((sampleIndex, position) => {
+      const sample = trainingData[sampleIndex];
+      if (previousInput >= 0) input[previousInput] = 0;
+      if (previousTarget >= 0) target[previousTarget] = 0;
+      input[sample.inputIndex] = 1;
+      target[sample.targetIndex] = 1;
+      previousInput = sample.inputIndex;
+      previousTarget = sample.targetIndex;
+      const before = network.forward(input).output.toArray();
+      lossTotal -= Math.log(Math.max(before[sample.targetIndex], 1e-12));
+      if (position === 0) {
+        predictionIndex = before.reduce((best, value, index) => value > before[best] ? index : best, 0);
+        confidence = before[predictionIndex];
+      }
+      network.train(input, target);
+    });
+
     self.postMessage({
       type: 'trained',
       roundId: message.roundId,
       workerId: message.workerId,
-      sampleIndex: message.sampleIndex,
+      sampleIndex: sampleIndexes[0],
       predictionIndex,
-      confidence: before[predictionIndex],
-      targetProbability: before[sample.targetIndex],
+      confidence,
+      meanLoss: lossTotal / sampleIndexes.length,
+      trainedSteps: sampleIndexes.length,
       network: network.serialize(),
     });
   } catch (error) {
