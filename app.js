@@ -128,17 +128,31 @@ class NeuralNetwork {
   addHiddenLayer(neuronCount) {
     const outputBias = this.biases.at(-1);
     const previousSize = this.layerSizes.at(-2);
-    this.layerSizes.splice(-1, 0, neuronCount);
+    const insertedSize = Math.max(neuronCount, previousSize);
+    const previousOutputWeights = this.weights.at(-1);
+    if (insertedSize !== previousSize) previousOutputWeights.resize(this.outputNodes, insertedSize);
+    const transition = new Matrix(insertedSize, previousSize);
+    const transitionBias = new Matrix(insertedSize, 1);
+
+    // sigmoid(5.5x - 2.75) aproxima a identidade em [0, 1], faixa das ativações ocultas.
+    // Pequeno ruído quebra a simetria sem apagar a representação aprendida.
+    transition.data = transition.data.map((row, target) => row.map((_, source) => (
+      target === source ? 5.5 + (Math.random() * 2 - 1) * 0.015 : (Math.random() * 2 - 1) * 0.004
+    )));
+    transitionBias.data = transitionBias.data.map(() => [-2.75 + (Math.random() * 2 - 1) * 0.008]);
+
+    this.layerSizes.splice(-1, 0, insertedSize);
     this.weights = [
       ...this.weights.slice(0, -1),
-      new Matrix(neuronCount, previousSize).randomize(0.35),
-      new Matrix(this.outputNodes, neuronCount).randomize(0.35),
+      transition,
+      previousOutputWeights,
     ];
     this.biases = [
       ...this.biases.slice(0, -1),
-      new Matrix(neuronCount, 1).randomize(0.35),
+      transitionBias,
       outputBias,
     ];
+    return insertedSize;
   }
 
   sigmoid(value) {
@@ -689,12 +703,12 @@ function updateGrowth(loss) {
     growthHistory.push({ epoch, type: 'neuron', layer: layerIndex });
     setLesson('A rede ganhou capacidade', message);
   } else if (network.hiddenLayerCount < config.maxHiddenLayers) {
-    network.addHiddenLayer(config.newLayerSize);
+    const insertedSize = network.addHiddenLayer(config.newLayerSize);
     const layerIndex = network.lastHiddenIndex;
     growthAnimation = { type: 'layer', layerIndex, startedAt: performance.now() };
-    animationUntil = performance.now() + config.newLayerSize * 110 + 1000;
-    const message = `A camada anterior atingiu ${config.maxNeuronsPerLayer} neurônios; nasceu a camada oculta ${layerIndex}.`;
-    addGrowthEvent(`+ camada ${layerIndex} · ${config.newLayerSize} neurônios`);
+    animationUntil = performance.now() + insertedSize * 110 + 1000;
+    const message = `A camada anterior atingiu ${config.maxNeuronsPerLayer} neurônios; nasceu a camada oculta ${layerIndex} com ${insertedSize} neurônios e uma transformação próxima da identidade.`;
+    addGrowthEvent(`+ camada ${layerIndex} · ${insertedSize} neurônios preservados`);
     growthHistory.push({ epoch, type: 'layer', layer: layerIndex });
     setLesson('Nova camada criada', message);
   } else {

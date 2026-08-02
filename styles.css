@@ -183,8 +183,9 @@ input, select { padding: 9px 10px; }
 #historyCanvas { display: block; width: 100%; height: 48px; margin-top: 3px; }
 
 #networkCanvas { flex: 1; min-height: 0; width: 100%; margin-top: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); cursor: crosshair; }
-.growth-log { position: absolute; right: 42px; bottom: 136px; color: var(--positive); text-align: right; font-size: .75rem; }
-.growth-log div { margin-top: 4px; }
+.growth-log { position: absolute; left: 50%; bottom: 136px; max-width: min(420px, 45vw); padding: 6px 9px; transform: translateX(-50%); border: 1px solid color-mix(in srgb, var(--positive) 28%, transparent); border-radius: 4px; background: color-mix(in srgb, var(--surface) 88%, transparent); color: var(--positive); text-align: center; font-size: .7rem; pointer-events: none; }
+.growth-log:empty { display: none; }
+.growth-log div { overflow: hidden; margin-top: 2px; text-overflow: ellipsis; white-space: nowrap; }
 
 .insight-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
 .neuron-details,
