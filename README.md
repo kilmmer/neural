@@ -12,7 +12,7 @@
 
 Este projeto é um **experimento educacional e visual** que demonstra uma **rede neural artificial capaz de crescer dinamicamente** quando o aprendizado entra em estagnação.
 
-O laboratório agora compara duas arquiteturas: a **MLP evolutiva**, que recebe a última palavra, e um modelo de **embeddings + atenção**, que aprende vetores densos e observa de 2 a 5 palavras de contexto. O corpus é separado de forma determinística em **80% para treino e 20% para teste**, permitindo observar generalização e não apenas memorização.
+O laboratório compara duas arquiteturas: a **MLP evolutiva**, que recebe a última palavra, e um **Tiny Transformer causal**, com dicionário, embeddings de tokens e posições, atenção multi-head, projeções Q/K/V, residual, normalização e feed-forward. O corpus é separado de forma determinística em **80% para treino e 20% para teste**.
 
 Ele é implementado em **JavaScript puro**, **sem bibliotecas externas**, e roda **100% no navegador**, com foco em **fundamentos de redes neurais, transparência e visualização**.
 
@@ -28,11 +28,11 @@ Demonstrar de forma clara e interativa:
 - Treinamento via **backpropagation**
 - Identificação de **estagnação de aprendizado**
 - Crescimento estrutural automático da rede (**auto-growth**) de neurônios e camadas
-- Comparação de loss de treino/teste entre MLP e atenção
+- Comparação de loss de treino/teste entre MLP e Tiny Transformer
 - Histórico visual de loss e eventos de crescimento
 - Persistência no navegador e importação/exportação completa em JSON
 
-O JSON inclui corpus, vocabulário, pesos, biases, embeddings, vetor de consulta da atenção, métricas e histórico. Ele usa o formato educacional deste projeto e não é diretamente um arquivo TensorFlow ou PyTorch.
+O JSON inclui corpus, dicionário, pesos, biases, embeddings, posições, matrizes Q/K/V, feed-forward, métricas e histórico. Ele usa o formato educacional deste projeto e não é diretamente um arquivo TensorFlow ou PyTorch.
 
 ---
 
@@ -40,11 +40,11 @@ O JSON inclui corpus, vocabulário, pesos, biases, embeddings, vetor de consulta
 
 Modelo A: palavra one-hot → camadas ocultas dinâmicas → próxima palavra
 
-Modelo B: contexto → embeddings → atenção → próxima palavra
+Modelo B: contexto → embeddings + posições → atenção multi-head → residual + normalização → feed-forward → próxima palavra
 
 - **Entrada**: vetor one-hot da palavra atual  
 - **Saída**: vetor one-hot da próxima palavra  
-- **Modelos**: previsão da próxima palavra por bigrama (MLP) e por contexto de 2–5 palavras (atenção)
+- **Modelos**: previsão da próxima palavra por bigrama (MLP) e por contexto de 2–12 palavras (Tiny Transformer)
 
 ---
 
@@ -130,9 +130,8 @@ Limitações esperadas:
 
 ### 🧪 O Que Este Projeto NÃO É
 - ❌ Não é um LLM
-- ❌ Não usa embeddings
-- ❌ Não possui atenção
-- ❌ Não mantém contexto longo
+- ❌ Não é um Transformer de produção ou um LLM de larga escala
+- ❌ Não mantém contexto além da janela configurada
 - ❌ Não generaliza semanticamente
 
 ---
@@ -150,8 +149,7 @@ Limitações esperadas:
 - Limite máximo de neurônios
 - Penalização por complexidade
 - Dropout
-- Embeddings contínuos
-- RNNs ou mecanismos de atenção
+- Mais blocos Transformer e contexto maior
 
 ---
 
@@ -228,9 +226,8 @@ Output (Next Word)
 
 ### ❌ What This Is NOT
 - Not an LLM
-- No embeddings
-- No attention
-- No long-term context
+- Not a production-scale Transformer or LLM
+- No context beyond the configured window
 - No semantic reasoning
 
 ---
@@ -253,8 +250,7 @@ Output (Next Word)
 ### 🚀 Next Steps
 - Statistical growth criteria
 - Regularization techniques
-- Embeddings
-- RNNs or attention-based models
+- More Transformer blocks and a larger context window
 
 ---
 

@@ -36,6 +36,8 @@
             <option value="3" selected>3 palavras</option>
             <option value="4">4 palavras</option>
             <option value="5">5 palavras</option>
+            <option value="8">8 palavras</option>
+            <option value="12">12 palavras</option>
           </select></label>
         <label class="execution-control" for="maxLayers"><span>Máx. camadas</span><select id="maxLayers">
             <option value="3">3 · leve</option>
@@ -102,6 +104,10 @@
             <dt>Treino / teste</dt>
             <dd id="splitCount">—</dd>
           </div>
+          <div>
+            <dt>Dicionário</dt>
+            <dd id="dictionarySize">—</dd>
+          </div>
         </dl>
         <div class="stagnation">
           <div><span>Estagnação</span><span id="stagnationDisplay">0 / 8</span></div>
@@ -120,7 +126,7 @@
         <label for="seedWord">Contexto inicial</label>
         <input id="seedWord" type="text" placeholder="Digite uma ou mais palavras do corpus" autocomplete="off">
         <label class="execution-control" for="generatorModel"><span>Modelo</span><select id="generatorModel">
-            <option value="attention">Embeddings + atenção</option>
+            <option value="attention">Tiny Transformer</option>
             <option value="mlp">Rede evolutiva</option>
           </select></label>
         <label class="execution-control" for="temperatureSelect"><span>Criatividade</span><select
@@ -157,7 +163,7 @@
           <p>Teste <b id="mlpTestLoss">—</b></p>
         </article>
         <article>
-          <div><span>Modelo B</span><strong>Embeddings + atenção</strong></div>
+          <div><span>Modelo B</span><strong>Tiny Transformer causal</strong><small id="transformerConfig">Aguardando corpus</small></div>
           <p>Treino <b id="attentionTrainLoss">—</b></p>
           <p>Teste <b id="attentionTestLoss">—</b></p>
         </article>

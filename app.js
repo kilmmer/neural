@@ -210,80 +210,199 @@ class NeuralNetwork {
 }
 
 class AttentionNetwork {
-  constructor(vocabSize, contextSize = 3, embeddingSize = 10) {
+  constructor(vocabSize, contextSize = 3, embeddingSize = null) {
+    this.version = 2;
     this.vocabSize = vocabSize;
     this.contextSize = contextSize;
-    this.embeddingSize = embeddingSize;
-    this.learningRate = 0.035;
-    const randomRow = scale => Array.from({ length: embeddingSize }, () => (Math.random() * 2 - 1) * scale);
-    this.embeddings = Array.from({ length: vocabSize }, () => randomRow(0.18));
-    this.outputWeights = Array.from({ length: vocabSize }, () => randomRow(0.12));
-    this.outputBiases = Array(vocabSize).fill(0);
-    this.query = randomRow(0.18);
+    this.embeddingSize = embeddingSize || (vocabSize <= 128 ? 16 : vocabSize <= 512 ? 24 : 32);
+    this.headCount = this.embeddingSize >= 24 ? 4 : 2;
+    this.headSize = this.embeddingSize / this.headCount;
+    this.feedForwardSize = this.embeddingSize * 2;
+    this.learningRate = 0.012;
+    const vector = (size, scale = 0) => Array.from({ length: size }, () => (Math.random() * 2 - 1) * scale);
+    const matrix = (rows, cols, scale = Math.sqrt(2 / (rows + cols))) => Array.from({ length: rows }, () => vector(cols, scale));
+    this.embeddings = Array.from({ length: vocabSize }, () => vector(this.embeddingSize, 0.16));
+    this.positions = Array.from({ length: contextSize }, () => vector(this.embeddingSize, 0.08));
+    this.queryWeights = Array.from({ length: this.headCount }, () => matrix(this.headSize, this.embeddingSize));
+    this.keyWeights = Array.from({ length: this.headCount }, () => matrix(this.headSize, this.embeddingSize));
+    this.valueWeights = Array.from({ length: this.headCount }, () => matrix(this.headSize, this.embeddingSize));
+    this.attentionOutputWeights = matrix(this.embeddingSize, this.embeddingSize);
+    this.feedForwardIn = matrix(this.feedForwardSize, this.embeddingSize);
+    this.feedForwardInBias = vector(this.feedForwardSize);
+    this.feedForwardOut = matrix(this.embeddingSize, this.feedForwardSize);
+    this.feedForwardOutBias = vector(this.embeddingSize);
+    this.outputWeights = matrix(vocabSize, this.embeddingSize, 0.12);
+    this.outputBiases = vector(vocabSize);
+  }
+
+  project(input, weights, bias = null) {
+    return weights.map((row, output) => row.reduce((sum, weight, index) => sum + weight * input[index], bias?.[output] || 0));
+  }
+
+  softmax(values) {
+    const maximum = Math.max(...values);
+    const exps = values.map(value => Math.exp(value - maximum));
+    const total = exps.reduce((sum, value) => sum + value, 0) || 1;
+    return exps.map(value => value / total);
+  }
+
+  normalize(values) {
+    const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+    const variance = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / values.length;
+    const inverseStd = 1 / Math.sqrt(variance + 1e-5);
+    const output = values.map(value => (value - mean) * inverseStd);
+    return { output, inverseStd };
   }
 
   forward(contextIndices) {
     const indices = contextIndices.slice(-this.contextSize);
-    const scores = indices.map(index => this.embeddings[index].reduce((sum, value, dim) => sum + value * this.query[dim], 0));
-    const maximum = Math.max(...scores);
-    const scoreExps = scores.map(score => Math.exp(score - maximum));
-    const scoreTotal = scoreExps.reduce((sum, value) => sum + value, 0) || 1;
-    const attention = scoreExps.map(value => value / scoreTotal);
-    const context = Array(this.embeddingSize).fill(0);
-    indices.forEach((wordIndex, position) => this.embeddings[wordIndex].forEach((value, dim) => { context[dim] += value * attention[position]; }));
-    const logits = this.outputWeights.map((row, word) => row.reduce((sum, value, dim) => sum + value * context[dim], this.outputBiases[word]));
-    const maxLogit = Math.max(...logits);
-    const exps = logits.map(value => Math.exp(value - maxLogit));
-    const total = exps.reduce((sum, value) => sum + value, 0) || 1;
-    return { output: exps.map(value => value / total), attention, context, indices };
+    const positionOffset = this.contextSize - indices.length;
+    const tokens = indices.map((index, position) => this.embeddings[index].map((value, dim) => (
+      value + this.positions[positionOffset + position][dim]
+    )));
+    const lastToken = tokens.at(-1);
+    const heads = [];
+    for (let head = 0; head < this.headCount; head++) {
+      const query = this.project(lastToken, this.queryWeights[head]);
+      const keys = tokens.map(token => this.project(token, this.keyWeights[head]));
+      const values = tokens.map(token => this.project(token, this.valueWeights[head]));
+      const scores = keys.map(key => query.reduce((sum, value, dim) => sum + value * key[dim], 0) / Math.sqrt(this.headSize));
+      const attention = this.softmax(scores);
+      const output = Array(this.headSize).fill(0);
+      values.forEach((value, position) => value.forEach((item, dim) => { output[dim] += item * attention[position]; }));
+      heads.push({ query, keys, values, attention, output });
+    }
+    const concatenated = heads.flatMap(head => head.output);
+    const attentionProjection = this.project(concatenated, this.attentionOutputWeights);
+    const residual1 = lastToken.map((value, dim) => value + attentionProjection[dim]);
+    const normalized1 = this.normalize(residual1);
+    const feedForwardPre = this.project(normalized1.output, this.feedForwardIn, this.feedForwardInBias);
+    const feedForwardActivation = feedForwardPre.map(value => Math.max(0, value));
+    const feedForwardOutput = this.project(feedForwardActivation, this.feedForwardOut, this.feedForwardOutBias);
+    const residual2 = normalized1.output.map((value, dim) => value + feedForwardOutput[dim]);
+    const normalized2 = this.normalize(residual2);
+    const logits = this.project(normalized2.output, this.outputWeights, this.outputBiases);
+    return {
+      output: this.softmax(logits),
+      attention: heads[0].attention.map((_, position) => heads.reduce((sum, head) => sum + head.attention[position], 0) / heads.length),
+      context: normalized2.output,
+      indices,
+      cache: { tokens, positionOffset, heads, concatenated, normalized1, feedForwardPre, feedForwardActivation, residual2, normalized2 },
+    };
+  }
+
+  backwardProjection(weights, gradient) {
+    return Array(weights[0].length).fill(0).map((_, input) => weights.reduce((sum, row, output) => sum + row[input] * gradient[output], 0));
+  }
+
+  updateProjection(weights, input, gradient, bias = null) {
+    const rate = this.learningRate;
+    weights.forEach((row, output) => row.forEach((_, index) => { row[index] -= rate * Math.max(-1, Math.min(1, gradient[output] * input[index])); }));
+    if (bias) bias.forEach((_, output) => { bias[output] -= rate * Math.max(-1, Math.min(1, gradient[output])); });
+  }
+
+  backwardNormalize(gradient, normalized) {
+    const count = gradient.length;
+    const sum = gradient.reduce((total, value) => total + value, 0);
+    const projected = gradient.reduce((total, value, index) => total + value * normalized.output[index], 0);
+    return gradient.map((value, index) => normalized.inverseStd / count * (count * value - sum - normalized.output[index] * projected));
   }
 
   train(contextIndices, targetIndex) {
     const result = this.forward(contextIndices);
-    const contextGradient = Array(this.embeddingSize).fill(0);
-    for (let word = 0; word < this.vocabSize; word++) {
-      const error = (word === targetIndex ? 1 : 0) - result.output[word];
-      for (let dim = 0; dim < this.embeddingSize; dim++) {
-        contextGradient[dim] += error * this.outputWeights[word][dim];
-        this.outputWeights[word][dim] += this.learningRate * error * result.context[dim];
-      }
-      this.outputBiases[word] += this.learningRate * error;
-    }
-    result.indices.forEach((wordIndex, position) => {
-      for (let dim = 0; dim < this.embeddingSize; dim++) {
-        this.embeddings[wordIndex][dim] += this.learningRate * contextGradient[dim] * result.attention[position];
-        const distinctiveness = this.embeddings[wordIndex][dim] - result.context[dim];
-        this.query[dim] += this.learningRate * 0.08 * result.attention[position] * contextGradient[dim] * distinctiveness;
-      }
+    const cache = result.cache;
+    const logitsGradient = [...result.output];
+    logitsGradient[targetIndex] -= 1;
+    let gradient = this.backwardProjection(this.outputWeights, logitsGradient);
+    this.updateProjection(this.outputWeights, cache.normalized2.output, logitsGradient, this.outputBiases);
+
+    gradient = this.backwardNormalize(gradient, cache.normalized2);
+    let normalized1Gradient = [...gradient];
+    const feedForwardGradient = this.backwardProjection(this.feedForwardOut, gradient);
+    this.updateProjection(this.feedForwardOut, cache.feedForwardActivation, gradient, this.feedForwardOutBias);
+    const feedForwardPreGradient = feedForwardGradient.map((value, index) => cache.feedForwardPre[index] > 0 ? value : 0);
+    const feedForwardInputGradient = this.backwardProjection(this.feedForwardIn, feedForwardPreGradient);
+    this.updateProjection(this.feedForwardIn, cache.normalized1.output, feedForwardPreGradient, this.feedForwardInBias);
+    normalized1Gradient = normalized1Gradient.map((value, index) => value + feedForwardInputGradient[index]);
+
+    const residual1Gradient = this.backwardNormalize(normalized1Gradient, cache.normalized1);
+    const tokenGradients = cache.tokens.map(() => Array(this.embeddingSize).fill(0));
+    tokenGradients.at(-1).forEach((_, dim) => { tokenGradients.at(-1)[dim] += residual1Gradient[dim]; });
+    const concatenatedGradient = this.backwardProjection(this.attentionOutputWeights, residual1Gradient);
+    this.updateProjection(this.attentionOutputWeights, cache.concatenated, residual1Gradient);
+
+    cache.heads.forEach((head, headIndex) => {
+      const headGradient = concatenatedGradient.slice(headIndex * this.headSize, (headIndex + 1) * this.headSize);
+      const attentionGradient = head.values.map(value => value.reduce((sum, item, dim) => sum + item * headGradient[dim], 0));
+      const weightedGradient = attentionGradient.reduce((sum, value, index) => sum + value * head.attention[index], 0);
+      const scoreGradient = attentionGradient.map((value, index) => head.attention[index] * (value - weightedGradient));
+      const queryGradient = Array(this.headSize).fill(0);
+      cache.tokens.forEach((token, position) => {
+        const valueGradient = headGradient.map(value => value * head.attention[position]);
+        const keyGradient = head.query.map(value => value * scoreGradient[position] / Math.sqrt(this.headSize));
+        head.keys[position].forEach((value, dim) => { queryGradient[dim] += value * scoreGradient[position] / Math.sqrt(this.headSize); });
+        const valueInputGradient = this.backwardProjection(this.valueWeights[headIndex], valueGradient);
+        const keyInputGradient = this.backwardProjection(this.keyWeights[headIndex], keyGradient);
+        tokenGradients[position] = tokenGradients[position].map((value, dim) => value + valueInputGradient[dim] + keyInputGradient[dim]);
+        this.updateProjection(this.valueWeights[headIndex], token, valueGradient);
+        this.updateProjection(this.keyWeights[headIndex], token, keyGradient);
+      });
+      const queryInputGradient = this.backwardProjection(this.queryWeights[headIndex], queryGradient);
+      tokenGradients[tokenGradients.length - 1] = tokenGradients.at(-1)
+        .map((value, dim) => value + queryInputGradient[dim]);
+      this.updateProjection(this.queryWeights[headIndex], cache.tokens.at(-1), queryGradient);
     });
+
+    tokenGradients.forEach((tokenGradient, position) => tokenGradient.forEach((value, dim) => {
+      const clipped = Math.max(-1, Math.min(1, value));
+      this.embeddings[result.indices[position]][dim] -= this.learningRate * clipped;
+      this.positions[cache.positionOffset + position][dim] -= this.learningRate * clipped;
+    }));
     return result;
   }
 
   serialize() {
-    return { vocabSize: this.vocabSize, contextSize: this.contextSize, embeddingSize: this.embeddingSize, learningRate: this.learningRate, embeddings: this.embeddings, outputWeights: this.outputWeights, outputBiases: this.outputBiases, query: this.query };
+    return { version: this.version, vocabSize: this.vocabSize, contextSize: this.contextSize, embeddingSize: this.embeddingSize, headCount: this.headCount, headSize: this.headSize, feedForwardSize: this.feedForwardSize, learningRate: this.learningRate, embeddings: this.embeddings, positions: this.positions, queryWeights: this.queryWeights, keyWeights: this.keyWeights, valueWeights: this.valueWeights, attentionOutputWeights: this.attentionOutputWeights, feedForwardIn: this.feedForwardIn, feedForwardInBias: this.feedForwardInBias, feedForwardOut: this.feedForwardOut, feedForwardOutBias: this.feedForwardOutBias, outputWeights: this.outputWeights, outputBiases: this.outputBiases };
   }
 
   static restore(state) {
     const model = new AttentionNetwork(state.vocabSize, state.contextSize, state.embeddingSize);
-    Object.assign(model, state);
+    if (state.version === 2) Object.assign(model, state);
+    else {
+      model.embeddings = state.embeddings.map(row => Array.from({ length: model.embeddingSize }, (_, index) => row[index % row.length]));
+      model.outputWeights = state.outputWeights.map(row => Array.from({ length: model.embeddingSize }, (_, index) => row[index % row.length]));
+      model.outputBiases = [...state.outputBiases];
+    }
     return model;
   }
 }
 
 const MAX_CORPUS_TOKENS = 5000;
+const MAX_DICTIONARY_SIZE = 768;
 
 class TextProcessor {
   constructor(text) {
     const parsedWords = text.toLocaleLowerCase('pt-BR').match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu) ?? [];
     this.wasTruncated = parsedWords.length > MAX_CORPUS_TOKENS;
     this.words = parsedWords.slice(0, MAX_CORPUS_TOKENS);
-    this.vocab = [...new Set(this.words)];
+    const frequencies = new Map();
+    this.words.forEach(word => frequencies.set(word, (frequencies.get(word) || 0) + 1));
+    this.corpusVocabulary = new Set(frequencies.keys());
+    const rankedVocabulary = [...frequencies].sort((a, b) => b[1] - a[1]).map(([word]) => word);
+    this.vocabWasReduced = rankedVocabulary.length > MAX_DICTIONARY_SIZE;
+    this.vocab = this.vocabWasReduced
+      ? [...rankedVocabulary.slice(0, MAX_DICTIONARY_SIZE - 1), '<unk>']
+      : rankedVocabulary;
     this.vocabSize = this.vocab.length;
     this.wordIndex = new Map(this.vocab.map((word, index) => [word, index]));
+    this.unknownIndex = this.wordIndex.get('<unk>') ?? -1;
   }
 
+  indexForWord(word) { return this.wordIndex.get(word) ?? this.unknownIndex; }
+  hasWord(word) { return this.corpusVocabulary.has(word); }
+
   wordToVector(word) {
-    return this.indexToVector(this.wordIndex.get(word) ?? -1);
+    return this.indexToVector(this.indexForWord(word));
   }
 
   indexToVector(index) {
@@ -299,11 +418,11 @@ class TextProcessor {
 
   generateData(contextSize = 3) {
     return this.words.slice(0, -1).map((word, index) => ({
-      inputIndex: this.wordIndex.get(word),
-      targetIndex: this.wordIndex.get(this.words[index + 1]),
+      inputIndex: this.indexForWord(word),
+      targetIndex: this.indexForWord(this.words[index + 1]),
       inputWord: word,
       targetWord: this.words[index + 1],
-      contextIndices: this.words.slice(Math.max(0, index - contextSize + 1), index + 1).map(item => this.wordIndex.get(item)),
+      contextIndices: this.words.slice(Math.max(0, index - contextSize + 1), index + 1).map(item => this.indexForWord(item)),
       contextWords: this.words.slice(Math.max(0, index - contextSize + 1), index + 1),
     }));
   }
@@ -329,6 +448,7 @@ const elements = {
   layers: document.querySelector('#layerCount'),
   workers: document.querySelector('#workerCount'),
   splitCount: document.querySelector('#splitCount'),
+  dictionarySize: document.querySelector('#dictionarySize'),
   stagnation: document.querySelector('#stagnationDisplay'),
   bar: document.querySelector('#patienceBar'),
   growthRule: document.querySelector('#growthRule'),
@@ -344,6 +464,7 @@ const elements = {
   mlpTestLoss: document.querySelector('#mlpTestLoss'),
   attentionTrainLoss: document.querySelector('#attentionTrainLoss'),
   attentionTestLoss: document.querySelector('#attentionTestLoss'),
+  transformerConfig: document.querySelector('#transformerConfig'),
   historyCanvas: document.querySelector('#historyCanvas'),
   growthLog: document.querySelector('#growthLog'),
   currentInput: document.querySelector('#currentInput'),
@@ -490,6 +611,7 @@ function updateMetrics() {
   elements.layers.textContent = network?.hiddenLayerCount ?? '—';
   elements.workers.textContent = workerPool.length;
   elements.splitCount.textContent = dataset.length ? `${dataset.length} / ${testDataset.length}` : '—';
+  elements.dictionarySize.textContent = processor?.vocabSize ?? '—';
   elements.mlpTrainLoss.textContent = mlpEvaluatedTrainLoss === null ? '—' : mlpEvaluatedTrainLoss.toFixed(3);
   elements.mlpTestLoss.textContent = mlpTestLoss === null ? '—' : mlpTestLoss.toFixed(3);
   elements.attentionTrainLoss.textContent = attentionEvaluatedTrainLoss === null ? '—' : attentionEvaluatedTrainLoss.toFixed(3);
@@ -668,7 +790,8 @@ function prepareCorpus() {
     return false;
   }
   const truncationNotice = processor.wasTruncated ? ` Limite de ${MAX_CORPUS_TOKENS} tokens aplicado para proteger o navegador.` : '';
-  setStatus(`Corpus preparado: ${dataset.length} exemplos de treino, ${testDataset.length} de teste e ${processor.vocabSize} palavras únicas.${truncationNotice}`);
+  const dictionaryNotice = processor.vocabWasReduced ? ` Dicionário limitado a ${MAX_DICTIONARY_SIZE} tokens; palavras raras usam <unk>.` : '';
+  setStatus(`Corpus preparado: ${dataset.length} exemplos de treino, ${testDataset.length} de teste e ${processor.vocabSize} tokens no dicionário.${dictionaryNotice}${truncationNotice}`);
   setLesson('Corpus separado sem vazamento', `80% dos exemplos treinam os modelos; 20% ficam reservados para medir generalização usando até ${elements.contextSize.value} palavras de contexto.`);
   return true;
 }
@@ -684,6 +807,7 @@ function initializeNetwork() {
   const initialHidden = Math.min(5, processor.vocabSize);
   network = new NeuralNetwork([processor.vocabSize, initialHidden, processor.vocabSize]);
   attentionNetwork = new AttentionNetwork(processor.vocabSize, Number(elements.contextSize.value));
+  elements.transformerConfig.textContent = `${attentionNetwork.embeddingSize}D · ${attentionNetwork.headCount} cabeças · FF ${attentionNetwork.feedForwardSize}`;
   visualInput = processor.indexToVector(dataset[0].inputIndex);
   formationStartedAt = performance.now();
   animationUntil = formationStartedAt + 12000;
@@ -692,7 +816,7 @@ function initializeNetwork() {
   displayedLoss = -Math.log(Math.max(initialOutput[dataset[0].targetIndex], 1e-12));
   bestLoss = displayedLoss;
   updateMetrics();
-  setLesson('Rede criada', `Arquitetura inicial: ${processor.vocabSize} entradas → ${initialHidden} neurônios ocultos → ${processor.vocabSize} saídas.`);
+  setLesson('Duas redes criadas', `MLP: ${processor.vocabSize} → ${initialHidden} → ${processor.vocabSize}. Transformer: embeddings ${attentionNetwork.embeddingSize}D, ${attentionNetwork.headCount} cabeças e feed-forward ${attentionNetwork.feedForwardSize}.`);
   return true;
 }
 
@@ -981,7 +1105,7 @@ function generateStory() {
     return;
   }
   const seedWords = elements.seed.value.toLocaleLowerCase('pt-BR').match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu) ?? [];
-  if (!seedWords.length || seedWords.some(word => !processor.vocab.includes(word))) {
+  if (!seedWords.length || seedWords.some(word => !processor.hasWord(word))) {
     setStatus('Todas as palavras do contexto inicial precisam existir no corpus.');
     return;
   }
@@ -996,10 +1120,12 @@ function generateStory() {
   });
   for (let index = 0; index < 15; index++) {
     const output = elements.generatorModel.value === 'attention'
-      ? attentionNetwork.forward(generated.slice(-attentionNetwork.contextSize).map(word => processor.wordIndex.get(word))).output
+      ? attentionNetwork.forward(generated.slice(-attentionNetwork.contextSize).map(word => processor.indexForWord(word))).output
       : network.feedForward(processor.wordToVector(current)).output;
-    const recentIndices = generated.map(word => processor.wordIndex.get(word));
-    const sampled = sampleNextWord(output, recentIndices, Number(elements.temperature.value));
+    const generationOutput = [...output];
+    if (processor.unknownIndex >= 0) generationOutput[processor.unknownIndex] = 0;
+    const recentIndices = generated.map(word => processor.indexForWord(word));
+    const sampled = sampleNextWord(generationOutput, recentIndices, Number(elements.temperature.value));
     const prediction = { word: processor.vocab[sampled.index], confidence: sampled.probability, index: sampled.index };
     const word = document.createElement('span');
     word.className = `generated-word ${prediction.confidence > 0.8 ? 'high' : 'low'}`;
@@ -1045,6 +1171,7 @@ function applySnapshot(snapshot, options = {}) {
   if (!prepareCorpus()) throw new Error('O corpus salvo não produz exemplos suficientes.');
   network = restoreMlp(snapshot.mlp);
   attentionNetwork = AttentionNetwork.restore(snapshot.attention);
+  elements.transformerConfig.textContent = `${attentionNetwork.embeddingSize}D · ${attentionNetwork.headCount} cabeças · FF ${attentionNetwork.feedForwardSize}`;
   ({ epoch = 0, bestLoss = Infinity, displayedLoss = null, attentionLoss = null, mlpTestLoss = null, attentionTestLoss = null, mlpEvaluatedTrainLoss = null, attentionEvaluatedTrainLoss = null, stagnation = 0, lastGrowthEpoch = 0 } = snapshot.metrics || {});
   lossHistory = Array.isArray(snapshot.history) ? snapshot.history : [];
   growthHistory = Array.isArray(snapshot.growthHistory) ? snapshot.growthHistory : [];
