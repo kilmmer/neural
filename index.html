@@ -117,6 +117,11 @@
             <option value="attention">Embeddings + atenção</option>
             <option value="mlp">Rede evolutiva</option>
           </select></label>
+        <label class="execution-control" for="temperatureSelect"><span>Criatividade</span><select id="temperatureSelect">
+            <option value="0.65">Precisa</option>
+            <option value="0.9" selected>Equilibrada</option>
+            <option value="1.15">Exploradora</option>
+          </select></label>
         <button id="generateButton" class="button button-primary" type="button">Gerar texto</button>
         <output id="generatedText" class="generated-text" aria-live="polite">Insira um corpus e inicie o
           treinamento.</output>

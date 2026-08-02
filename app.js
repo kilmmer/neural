@@ -319,6 +319,7 @@ const elements = {
   growthRule: document.querySelector('#growthRule'),
   generated: document.querySelector('#generatedText'),
   generatorModel: document.querySelector('#generatorModel'),
+  temperature: document.querySelector('#temperatureSelect'),
   save: document.querySelector('#saveButton'),
   load: document.querySelector('#loadButton'),
   export: document.querySelector('#exportButton'),
@@ -891,6 +892,26 @@ function trainFrame(now) {
   else performTrainingStep();
 }
 
+function sampleNextWord(probabilities, recentIndices, temperature = 0.9, topK = 6) {
+  const recentWindow = recentIndices.slice(-6);
+  const immediatePrevious = recentWindow.at(-1);
+  const ranked = probabilities.map((probability, index) => {
+    const occurrences = recentWindow.reduce((total, value) => total + Number(value === index), 0);
+    let score = Math.pow(Math.max(probability, 1e-12), 1 / temperature);
+    score /= Math.pow(1.8, occurrences);
+    if (index === immediatePrevious) score /= 4;
+    return { index, probability, score };
+  }).sort((a, b) => b.score - a.score).slice(0, Math.min(topK, probabilities.length));
+
+  const total = ranked.reduce((sum, item) => sum + item.score, 0);
+  let draw = Math.random() * total;
+  for (const item of ranked) {
+    draw -= item.score;
+    if (draw <= 0) return item;
+  }
+  return ranked.at(-1);
+}
+
 function generateStory() {
   if (!network || !processor) {
     setStatus('Inicie a rede antes de gerar uma sequência.');
@@ -904,22 +925,30 @@ function generateStory() {
 
   elements.generated.replaceChildren();
   const generated = [...seedWords];
+  seedWords.forEach(seed => {
+    const word = document.createElement('span');
+    word.className = 'generated-word seed';
+    word.textContent = `${seed} `;
+    elements.generated.append(word);
+  });
   for (let index = 0; index < 15; index++) {
-    const current = generated.at(-1);
     const output = elements.generatorModel.value === 'attention'
       ? attentionNetwork.forward(generated.slice(-attentionNetwork.contextSize).map(word => processor.wordIndex.get(word))).output
       : network.feedForward(processor.wordToVector(current)).output;
-    const prediction = processor.vectorToWord(output);
+    const recentIndices = generated.map(word => processor.wordIndex.get(word));
+    const sampled = sampleNextWord(output, recentIndices, Number(elements.temperature.value));
+    const prediction = { word: processor.vocab[sampled.index], confidence: sampled.probability, index: sampled.index };
     const word = document.createElement('span');
     word.className = `generated-word ${prediction.confidence > 0.8 ? 'high' : 'low'}`;
-    word.textContent = `${current} `;
+    word.textContent = `${prediction.word} `;
     elements.generated.append(word);
     generated.push(prediction.word);
   }
   elements.generated.append('…');
   visualInput = processor.wordToVector(seedWords.at(-1));
   markRenderDirty();
-  setStatus('Sequência gerada com o estado atual da rede.');
+  setStatus('Sequência gerada com top-k, temperatura e penalidade de repetição.');
+  setLesson('Geração probabilística', 'Em vez de escolher sempre a maior saída, o laboratório sorteia entre alternativas plausíveis e reduz a chance de repetir palavras recentes.');
 }
 
 function createSnapshot() {
