@@ -23,10 +23,14 @@
         </div>
         <label for="corpusText">Corpus de texto</label>
         <textarea id="corpusText" spellcheck="false" placeholder="Cole aqui o texto que a rede deve aprender..."></textarea>
-        <p class="field-hint">Use ao menos duas palavras. O modo didático avança um passo a cada 0,26 s.</p>
+        <p class="field-hint">Cada palavra ensina a rede a prever a palavra seguinte.</p>
         <div class="button-row">
           <button id="restartButton" class="button button-secondary" type="button">Reiniciar rede</button>
           <button id="pauseButton" class="button button-primary" type="button" aria-pressed="true">Iniciar</button>
+        </div>
+        <div class="explore-controls">
+          <button id="stepButton" class="button button-secondary" type="button">Avançar 1 passo</button>
+          <label class="speed-control" for="speedSelect"><span>Velocidade</span><select id="speedSelect"><option value="700">Lenta</option><option value="400" selected>Didática</option><option value="150">Rápida</option></select></label>
         </div>
         <p id="statusMessage" class="status-message" role="status" aria-live="polite"></p>
       </section>
@@ -43,8 +47,9 @@
           <div><dt>Camadas ocultas</dt><dd id="layerCount">—</dd></div>
         </dl>
         <div class="stagnation">
-          <div><span>Estagnação</span><span id="stagnationDisplay">0%</span></div>
+          <div><span>Estagnação</span><span id="stagnationDisplay">0 / 12</span></div>
           <div class="progress-bar" aria-hidden="true"><div id="patienceBar" class="progress-fill"></div></div>
+          <p id="growthRule" class="metric-note">A rede cresce após 12 avaliações sem melhora.</p>
         </div>
       </section>
 
@@ -65,14 +70,24 @@
         <div><p class="eyebrow">Visualização em tempo real</p><h2 id="visualization-title">Arquitetura da rede</h2></div>
         <div class="legend" aria-label="Legenda das sinapses"><span><i class="legend-positive"></i>Reforço</span><span><i class="legend-negative"></i>Inibição</span></div>
       </header>
+      <section class="learning-strip" aria-label="Exemplo atual de treinamento">
+        <div><span>Entrada</span><strong id="currentInput">—</strong></div>
+        <div><span>Alvo correto</span><strong id="currentTarget">—</strong></div>
+        <div><span>Previsão</span><strong id="currentPrediction">—</strong></div>
+        <div><span>Confiança</span><strong id="currentConfidence">—</strong></div>
+      </section>
       <canvas id="networkCanvas" tabindex="0" role="application" aria-label="Visualização interativa da rede neural. Clique em um neurônio para ver seus detalhes."></canvas>
       <div id="growthLog" class="growth-log" aria-live="polite"></div>
-      <section class="neuron-details" aria-labelledby="neuronDetailsTitle" aria-live="polite">
-        <p class="eyebrow">Inspeção</p>
-        <h3 id="neuronDetailsTitle">Selecione um neurônio</h3>
-        <p id="neuronDetailsContent">Clique em qualquer ponto da rede para ver sua camada, ativação e conexões.</p>
-      </section>
-      <p class="visual-note">Entrada · Camada oculta dinâmica · Próxima palavra</p>
+      <div class="insight-grid">
+        <section class="neuron-details" aria-labelledby="neuronDetailsTitle" aria-live="polite">
+          <p class="eyebrow">Inspeção</p>
+          <div><h3 id="neuronDetailsTitle">Selecione um neurônio</h3><p id="neuronDetailsContent">Clique em um neurônio para ver ativação, bias e conexões.</p></div>
+        </section>
+        <section class="teacher-note" aria-labelledby="teacherTitle" aria-live="polite">
+          <p class="eyebrow">Entenda o passo</p>
+          <div><h3 id="teacherTitle">Laboratório pronto</h3><p id="teacherText">Insira um corpus e use “Avançar 1 passo” para observar o aprendizado.</p></div>
+        </section>
+      </div>
     </section>
   </main>
   <script src="app.js"></script>

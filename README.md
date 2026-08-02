@@ -48,6 +48,8 @@ Saída (Próxima Palavra)
 #### Coluna Esquerda — Controle e Diagnóstico
 - Inserção do **corpus de texto**
 - Reinício completo da rede
+- Treinamento contínuo ou avanço de **um passo por vez**
+- Controle de velocidade para observação didática
 - Métricas em tempo real:
   - Epochs
   - Erro atual (loss)
@@ -60,6 +62,9 @@ Saída (Próxima Palavra)
   - Verde → reforço
   - Vermelho → inibição
 - Intensidade visual representa o peso da conexão
+- Rótulos dinâmicos para todas as camadas
+- Inspeção de neurônios por clique
+- Painel que mostra entrada, alvo, previsão e confiança a cada passo
 
 ---
 
@@ -91,10 +96,10 @@ Classe `NeuralNetwork`:
 ---
 
 ### 📈 Loop de Treinamento
-- Execução contínua com `requestAnimationFrame`
-- Treinamento em mini-batches aleatórios
+- Execução cadenciada com `requestAnimationFrame`
+- Treinamento por amostras aleatórias, com modo passo a passo
 - Atualização em tempo real da visualização e métricas
-- O treinamento **nunca para**
+- Pausa e retomada controladas pelo usuário
 
 ---
 
