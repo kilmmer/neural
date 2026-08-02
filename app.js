@@ -97,10 +97,32 @@ class NeuralNetwork {
 
   addNeuronToLayer(layerIndex) {
     const incomingIndex = layerIndex - 1;
+    const previousSize = this.layerSizes[layerIndex];
+    const outgoing = this.weights[incomingIndex + 1];
+    const donorIndex = Array.from({ length: previousSize }, (_, index) => index).reduce((best, index) => {
+      const strength = outgoing.data.reduce((sum, row) => sum + Math.abs(row[index]), 0);
+      const bestStrength = outgoing.data.reduce((sum, row) => sum + Math.abs(row[best]), 0);
+      return strength > bestStrength ? index : best;
+    }, 0);
+
     this.layerSizes[layerIndex]++;
     this.weights[incomingIndex].resize(this.layerSizes[layerIndex], this.layerSizes[layerIndex - 1]);
     this.biases[incomingIndex].resize(this.layerSizes[layerIndex], 1);
     this.weights[incomingIndex + 1].resize(this.layerSizes[layerIndex + 1], this.layerSizes[layerIndex]);
+
+    const newIndex = this.layerSizes[layerIndex] - 1;
+    this.weights[incomingIndex].data[newIndex] = this.weights[incomingIndex].data[donorIndex]
+      .map(weight => weight + (Math.random() * 2 - 1) * 0.008);
+    this.biases[incomingIndex].data[newIndex][0] = this.biases[incomingIndex].data[donorIndex][0]
+      + (Math.random() * 2 - 1) * 0.004;
+
+    this.weights[incomingIndex + 1].data.forEach(row => {
+      const sharedWeight = row[donorIndex] / 2;
+      row[donorIndex] = sharedWeight;
+      row[newIndex] = sharedWeight;
+    });
+
+    return { donorIndex, newIndex };
   }
 
   addHiddenLayer(neuronCount) {
@@ -658,12 +680,11 @@ function updateGrowth(loss) {
 
   if (network.canAddNeuron(config.maxNeuronsPerLayer)) {
     const layerIndex = network.lastHiddenIndex;
-    network.addNeuronToLayer(layerIndex);
-    const neuronIndex = network.layerSizes[layerIndex] - 1;
+    const { donorIndex, newIndex: neuronIndex } = network.addNeuronToLayer(layerIndex);
     growthAnimation = { type: 'neuron', layerIndex, neuronIndex, startedAt: performance.now() };
     animationUntil = performance.now() + 1200;
-    const message = `Loss estagnada: novo neurônio na camada ${layerIndex}.`;
-    addGrowthEvent(`+ neurônio · camada ${layerIndex}`);
+    const message = `Loss estagnada: o neurônio ${donorIndex + 1} foi dividido com o novo neurônio ${neuronIndex + 1}; entradas herdadas e pesos de saída redistribuídos.`;
+    addGrowthEvent(`+ neurônio ${neuronIndex + 1} · conexões rebalanceadas`);
     growthHistory.push({ epoch, type: 'neuron', layer: layerIndex });
     setLesson('A rede ganhou capacidade', message);
   } else if (network.hiddenLayerCount < config.maxHiddenLayers) {
@@ -1085,7 +1106,7 @@ function drawNetwork(now) {
   const { elapsed, starts, visible } = formationVisibility(now, displayIndices.map(indices => indices.length));
 
   const drawSynapse = (x1, y1, x2, y2, weight, opacity) => {
-    if (Math.abs(weight) < 0.2 || opacity <= 0) return;
+    if (Math.abs(weight) < 0.06 || opacity <= 0) return;
     const alpha = Math.min(0.66, Math.abs(weight) * 0.36) * opacity;
     ctx.beginPath();
     ctx.moveTo(x1, y1);
