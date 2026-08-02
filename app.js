@@ -130,7 +130,12 @@ class NeuralNetwork {
     const previousSize = this.layerSizes.at(-2);
     const insertedSize = Math.max(neuronCount, previousSize);
     const previousOutputWeights = this.weights.at(-1);
-    if (insertedSize !== previousSize) previousOutputWeights.resize(this.outputNodes, insertedSize);
+    if (insertedSize !== previousSize) {
+      previousOutputWeights.resize(this.outputNodes, insertedSize);
+      previousOutputWeights.data.forEach(row => {
+        for (let column = previousSize; column < insertedSize; column++) row[column] = 0;
+      });
+    }
     const transition = new Matrix(insertedSize, previousSize);
     const transitionBias = new Matrix(insertedSize, 1);
 
@@ -495,6 +500,7 @@ const elements = {
   seed: document.querySelector('#seedWord'),
   status: document.querySelector('#statusMessage'),
   epoch: document.querySelector('#epochDisplay'),
+  transformerSteps: document.querySelector('#transformerSteps'),
   loss: document.querySelector('#lossDisplay'),
   neurons: document.querySelector('#neuronCount'),
   layers: document.querySelector('#layerCount'),
@@ -537,13 +543,22 @@ const config = {
   patienceLimit: 8,
   improvementDelta: 0.002,
   targetLoss: 0.08,
-  maxNeuronsPerLayer: 8,
+  maxAdaptiveWidth: 64,
+  layerWidthStep: 8,
   maxHiddenLayers: 5,
-  newLayerSize: 4,
   maxVisualNodesPerLayer: 56,
   drawInterval: 33,
   workerBatchSize: 8,
 };
+
+function initialHiddenWidth(vocabSize) {
+  return Math.min(vocabSize, Math.max(5, Math.min(16, Math.round(Math.sqrt(vocabSize) / 2))));
+}
+
+function hiddenLayerCapacity(layerIndex) {
+  const base = Math.max(8, Math.round(Math.sqrt(processor?.vocabSize || 1)));
+  return Math.min(config.maxAdaptiveWidth, base + Math.max(0, layerIndex - 1) * config.layerWidthStep);
+}
 
 let processor;
 let network;
@@ -552,6 +567,7 @@ let dataset = [];
 let testDataset = [];
 let activeCorpus = '';
 let epoch = 0;
+let transformerEpoch = 0;
 let bestLoss = Infinity;
 let displayedLoss = null;
 let stagnation = 0;
@@ -564,6 +580,10 @@ let neuronHitAreas = [];
 let selectedNeuron = null;
 let selectedNeuronEpoch = -1;
 let workerPool = [];
+let transformerWorker = null;
+let transformerWorkerUrl = '';
+let transformerBusy = false;
+let transformerWorkerRound = 0;
 let requestedWorkerCount = 2;
 let workerRoundId = 0;
 let parallelBusy = false;
@@ -647,6 +667,11 @@ function updateGrowthExplanation() {
     elements.growthRule.textContent = 'Loss abaixo do alvo: crescimento não é necessário.';
     return;
   }
+  const currentCapacity = hiddenLayerCapacity(network.lastHiddenIndex);
+  if (!network.canAddNeuron(currentCapacity) && network.hiddenLayerCount >= config.maxHiddenLayers) {
+    elements.growthRule.textContent = `Limite atual de ${config.maxHiddenLayers} camadas atingido.`;
+    return;
+  }
   const adaptationRemaining = Math.max(0, Math.max(128, dataset.length * 2) - (epoch - lastGrowthEpoch));
   if (adaptationRemaining > 0) {
     elements.growthRule.textContent = `Adaptação estrutural: mais ${adaptationRemaining} exemplos antes de avaliar crescimento.`;
@@ -658,10 +683,11 @@ function updateGrowthExplanation() {
 
 function updateMetrics() {
   elements.epoch.textContent = epoch.toLocaleString('pt-BR');
+  elements.transformerSteps.textContent = transformerEpoch.toLocaleString('pt-BR');
   elements.loss.textContent = displayedLoss === null ? '—' : displayedLoss.toFixed(4);
   elements.neurons.textContent = network?.hiddenNodes ?? '—';
   elements.layers.textContent = network?.hiddenLayerCount ?? '—';
-  elements.workers.textContent = workerPool.length;
+  elements.workers.textContent = workerPool.length + Number(Boolean(transformerWorker));
   elements.splitCount.textContent = dataset.length ? `${dataset.length} / ${testDataset.length}` : '—';
   elements.dictionarySize.textContent = processor?.vocabSize ?? '—';
   elements.mlpTrainLoss.textContent = mlpEvaluatedTrainLoss === null ? '—' : mlpEvaluatedTrainLoss.toFixed(3);
@@ -703,6 +729,90 @@ function applyAveragedNetworks(states) {
       / states.length
     )));
   });
+}
+
+function transformerWorkerRuntime() {
+  let model;
+  let trainingData = [];
+  self.addEventListener('message', event => {
+    const message = event.data;
+    try {
+      if (message.type === 'init') {
+        model = AttentionNetwork.restore(message.model);
+        trainingData = message.dataset;
+        self.postMessage({ type: 'ready' });
+        return;
+      }
+      if (message.type !== 'train' || !model) return;
+      let lossTotal = 0;
+      message.sampleIndexes.forEach(sampleIndex => {
+        const sample = trainingData[sampleIndex];
+        const result = model.train(sample.contextIndices, sample.targetIndex);
+        lossTotal -= Math.log(Math.max(result.output[sample.targetIndex], 1e-12));
+      });
+      self.postMessage({
+        type: 'trained',
+        roundId: message.roundId,
+        trainedSteps: message.sampleIndexes.length,
+        meanLoss: lossTotal / message.sampleIndexes.length,
+        model: message.sync ? model.serialize() : null,
+      });
+    } catch (error) {
+      self.postMessage({ type: 'error', roundId: message.roundId, message: error instanceof Error ? error.message : String(error) });
+    }
+  });
+}
+
+function stopTransformerWorker() {
+  transformerWorkerRound++;
+  transformerWorker?.terminate();
+  transformerWorker = null;
+  transformerBusy = false;
+  if (transformerWorkerUrl) URL.revokeObjectURL(transformerWorkerUrl);
+  transformerWorkerUrl = '';
+}
+
+function ensureTransformerWorker() {
+  if (requestedWorkerCount === 1 || !attentionNetwork || typeof Worker === 'undefined') return false;
+  if (transformerWorker) return true;
+  try {
+    const source = `${AttentionNetwork.toString()}\n(${transformerWorkerRuntime.toString()})();`;
+    transformerWorkerUrl = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+    transformerWorker = new Worker(transformerWorkerUrl);
+    transformerWorker.postMessage({ type: 'init', model: attentionNetwork.serialize(), dataset });
+    updateMetrics();
+    return true;
+  } catch {
+    stopTransformerWorker();
+    return false;
+  }
+}
+
+function queueTransformerTraining() {
+  if (paused || transformerBusy || !ensureTransformerWorker() || !dataset.length) return;
+  transformerBusy = true;
+  const roundId = ++transformerWorkerRound;
+  const batchSize = processor.vocabSize > 512 ? 4 : 8;
+  const sampleIndexes = Array.from({ length: batchSize }, (_, offset) => (transformerEpoch + offset) % dataset.length);
+  const sync = roundId % 4 === 0;
+  const onMessage = event => {
+    const message = event.data;
+    if (message.roundId !== roundId) return;
+    transformerWorker.removeEventListener('message', onMessage);
+    transformerBusy = false;
+    if (message.type === 'trained') {
+      transformerEpoch += message.trainedSteps;
+      attentionLoss = attentionLoss === null ? message.meanLoss : attentionLoss * 0.85 + message.meanLoss * 0.15;
+      if (message.model) attentionNetwork = AttentionNetwork.restore(message.model);
+      updateMetrics();
+      if (!paused) setTimeout(queueTransformerTraining, 0);
+    } else {
+      stopTransformerWorker();
+      elements.workerStatus.textContent = `Transformer worker interrompido: ${message.message}`;
+    }
+  };
+  transformerWorker.addEventListener('message', onMessage);
+  transformerWorker.postMessage({ type: 'train', roundId, sampleIndexes, sync });
 }
 
 function stopWorkers() {
@@ -786,6 +896,7 @@ function configureExecutionMode() {
   requestedWorkerCount = [1, 2, 4, 8, 16].includes(selectedCount) ? selectedCount : 1;
   stopWorkers();
   if (requestedWorkerCount === 1) {
+    stopTransformerWorker();
     elements.step.textContent = 'Avançar 1 passo';
     elements.workerStatus.textContent = 'Treinamento e interface compartilham a thread principal.';
   } else {
@@ -801,6 +912,7 @@ function configureExecutionMode() {
 }
 
 function prepareCorpus() {
+  stopTransformerWorker();
   activeCorpus = elements.corpus.value;
   processor = new TextProcessor(activeCorpus);
   const allData = processor.generateData(Number(elements.contextSize.value));
@@ -810,6 +922,7 @@ function prepareCorpus() {
   network = undefined;
   attentionNetwork = undefined;
   epoch = 0;
+  transformerEpoch = 0;
   bestLoss = Infinity;
   displayedLoss = null;
   stagnation = 0;
@@ -856,7 +969,7 @@ function updateLossEstimate(sampleLoss) {
 
 function initializeNetwork() {
   if (dataset.length === 0) return false;
-  const initialHidden = Math.min(5, processor.vocabSize);
+  const initialHidden = initialHiddenWidth(processor.vocabSize);
   network = new NeuralNetwork([processor.vocabSize, initialHidden, processor.vocabSize]);
   attentionNetwork = new AttentionNetwork(processor.vocabSize, Number(elements.contextSize.value));
   elements.transformerConfig.textContent = `${attentionNetwork.embeddingSize}D · ${attentionNetwork.headCount} cabeças · FF ${attentionNetwork.feedForwardSize} · KV Cache`;
@@ -868,7 +981,7 @@ function initializeNetwork() {
   displayedLoss = -Math.log(Math.max(initialOutput[dataset[0].targetIndex], 1e-12));
   bestLoss = displayedLoss;
   updateMetrics();
-  setLesson('Duas redes criadas', `MLP: ${processor.vocabSize} → ${initialHidden} → ${processor.vocabSize}. Transformer: embeddings ${attentionNetwork.embeddingSize}D, ${attentionNetwork.headCount} cabeças e feed-forward ${attentionNetwork.feedForwardSize}.`);
+  setLesson('Duas redes criadas', `MLP adaptativa: ${processor.vocabSize} → ${initialHidden} (alvo ${hiddenLayerCapacity(1)}) → ${processor.vocabSize}. Transformer: embeddings ${attentionNetwork.embeddingSize}D, ${attentionNetwork.headCount} cabeças e feed-forward ${attentionNetwork.feedForwardSize}.`);
   return true;
 }
 
@@ -906,23 +1019,28 @@ function updateGrowth(loss) {
   stagnation++;
   if (stagnation < config.patienceLimit) return;
 
-  if (network.canAddNeuron(config.maxNeuronsPerLayer)) {
+  const layerCapacity = hiddenLayerCapacity(network.lastHiddenIndex);
+  if (network.canAddNeuron(layerCapacity)) {
     const layerIndex = network.lastHiddenIndex;
-    const { donorIndex, newIndex: neuronIndex } = network.addNeuronToLayer(layerIndex);
+    const growthCount = Math.min(Math.ceil(layerCapacity / 8), layerCapacity - network.layerSizes[layerIndex]);
+    const additions = Array.from({ length: growthCount }, () => network.addNeuronToLayer(layerIndex));
+    const { donorIndex, newIndex: neuronIndex } = additions.at(-1);
     growthAnimation = { type: 'neuron', layerIndex, neuronIndex, startedAt: performance.now() };
     animationUntil = performance.now() + 1200;
-    const message = `Loss estagnada: o neurônio ${donorIndex + 1} foi dividido com o novo neurônio ${neuronIndex + 1}; entradas herdadas e pesos de saída redistribuídos.`;
-    addGrowthEvent(`+ neurônio ${neuronIndex + 1} · conexões rebalanceadas`);
-    growthHistory.push({ epoch, type: 'neuron', layer: layerIndex });
+    const message = `Loss estagnada: ${growthCount} neurônio(s) foram adicionados à camada ${layerIndex}, agora com ${network.layerSizes[layerIndex]} de ${layerCapacity}. O último herdou o neurônio ${donorIndex + 1}.`;
+    addGrowthEvent(`+ ${growthCount} neurônio(s) · camada ${layerIndex} agora ${network.layerSizes[layerIndex]}/${layerCapacity}`);
+    growthHistory.push({ epoch, type: 'neuron', layer: layerIndex, count: growthCount });
     lastGrowthEpoch = epoch;
     setLesson('A rede ganhou capacidade', message);
   } else if (network.hiddenLayerCount < config.maxHiddenLayers) {
-    const insertedSize = network.addHiddenLayer(config.newLayerSize);
+    const previousWidth = network.layerSizes.at(-2);
+    const insertedSize = network.addHiddenLayer(previousWidth);
     const layerIndex = network.lastHiddenIndex;
     growthAnimation = { type: 'layer', layerIndex, startedAt: performance.now() };
     animationUntil = performance.now() + insertedSize * 110 + 1000;
-    const message = `A camada anterior atingiu ${config.maxNeuronsPerLayer} neurônios; nasceu a camada oculta ${layerIndex} com ${insertedSize} neurônios e uma transformação próxima da identidade.`;
-    addGrowthEvent(`+ camada ${layerIndex} · ${insertedSize} neurônios preservados`);
+    const nextCapacity = hiddenLayerCapacity(layerIndex);
+    const message = `A camada anterior atingiu sua capacidade; nasceu a camada oculta ${layerIndex} com ${insertedSize} neurônios preservados e alvo adaptativo ${nextCapacity}.`;
+    addGrowthEvent(`+ camada ${layerIndex} · ${insertedSize} → alvo ${nextCapacity}`);
     growthHistory.push({ epoch, type: 'layer', layer: layerIndex });
     lastGrowthEpoch = epoch;
     setLesson('Nova camada criada', message);
@@ -1037,6 +1155,7 @@ function performTrainingStep() {
   const attentionBefore = attentionNetwork.train(sample.contextIndices, sample.targetIndex).output;
   const sampleAttentionLoss = -Math.log(Math.max(attentionBefore[sample.targetIndex], 1e-12));
   attentionLoss = attentionLoss === null ? sampleAttentionLoss : attentionLoss * 0.9 + sampleAttentionLoss * 0.1;
+  transformerEpoch++;
   updateLearningPanel(sample, prediction);
   finishTrainingSteps(1);
 }
@@ -1068,13 +1187,7 @@ async function performParallelRound() {
     visualInput = processor.indexToVector(sample.inputIndex);
     const roundLoss = results.reduce((sum, result) => sum + result.meanLoss, 0) / results.length;
     updateLossEstimate(roundLoss);
-    const transformerUpdateLimit = processor.vocabSize > 512 ? 1 : processor.vocabSize > 128 ? 2 : 4;
-    results.slice(0, transformerUpdateLimit).forEach(result => {
-      const attentionSample = dataset[result.sampleIndex];
-      const output = attentionNetwork.train(attentionSample.contextIndices, attentionSample.targetIndex).output;
-      const loss = -Math.log(Math.max(output[attentionSample.targetIndex], 1e-12));
-      attentionLoss = attentionLoss === null ? loss : attentionLoss * 0.9 + loss * 0.1;
-    });
+    queueTransformerTraining();
     updateLearningPanel(sample, {
       word: processor.vocab[representative.predictionIndex],
       confidence: representative.confidence,
@@ -1083,7 +1196,7 @@ async function performParallelRound() {
     const completedSteps = results.reduce((sum, result) => sum + result.trainedSteps, 0);
     const elapsedSeconds = Math.max(0.001, (performance.now() - roundStartedAt) / 1000);
     const throughput = Math.round(completedSteps / elapsedSeconds);
-    elements.workerStatus.textContent = `${results.length} workers × ${batchSize} exemplos · ${throughput.toLocaleString('pt-BR')} exemplos/s na última rodada.`;
+    elements.workerStatus.textContent = `${results.length} workers MLP × ${batchSize} · ${throughput.toLocaleString('pt-BR')} exemplos/s · +1 worker dedicado ao Transformer.`;
     setLesson('Rodada paralela em lote', `${completedSteps} exemplos foram processados com apenas uma transferência de parâmetros por worker. Depois, os pesos foram combinados pela média.`);
     finishTrainingSteps(completedSteps);
     return true;
@@ -1107,6 +1220,7 @@ function startTraining() {
   paused = false;
   lastTrainingAt = performance.now();
   updateTrainingButton();
+  queueTransformerTraining();
   setStatus('Treinamento em execução. Pause para inspecionar com calma.');
 }
 
@@ -1216,7 +1330,7 @@ function createSnapshot() {
     maxHiddenLayers: config.maxHiddenLayers,
     vocabulary: processor.vocab,
     split: { strategy: '80/20 determinístico; cada quinto exemplo vai para teste', train: dataset.length, test: testDataset.length },
-    metrics: { epoch, bestLoss, displayedLoss, attentionLoss, mlpTestLoss, attentionTestLoss, mlpEvaluatedTrainLoss, attentionEvaluatedTrainLoss, stagnation, lastGrowthEpoch },
+    metrics: { epoch, transformerEpoch, bestLoss, displayedLoss, attentionLoss, mlpTestLoss, attentionTestLoss, mlpEvaluatedTrainLoss, attentionEvaluatedTrainLoss, stagnation, lastGrowthEpoch },
     history: lossHistory,
     growthHistory,
     mlp: serializeNetwork(),
@@ -1238,7 +1352,7 @@ function applySnapshot(snapshot, options = {}) {
   network = restoreMlp(snapshot.mlp);
   attentionNetwork = AttentionNetwork.restore(snapshot.attention);
   elements.transformerConfig.textContent = `${attentionNetwork.embeddingSize}D · ${attentionNetwork.headCount} cabeças · FF ${attentionNetwork.feedForwardSize} · KV Cache`;
-  ({ epoch = 0, bestLoss = Infinity, displayedLoss = null, attentionLoss = null, mlpTestLoss = null, attentionTestLoss = null, mlpEvaluatedTrainLoss = null, attentionEvaluatedTrainLoss = null, stagnation = 0, lastGrowthEpoch = 0 } = snapshot.metrics || {});
+  ({ epoch = 0, transformerEpoch = 0, bestLoss = Infinity, displayedLoss = null, attentionLoss = null, mlpTestLoss = null, attentionTestLoss = null, mlpEvaluatedTrainLoss = null, attentionEvaluatedTrainLoss = null, stagnation = 0, lastGrowthEpoch = 0 } = snapshot.metrics || {});
   lossHistory = Array.isArray(snapshot.history) ? snapshot.history : [];
   growthHistory = Array.isArray(snapshot.growthHistory) ? snapshot.growthHistory : [];
   visualInput = processor.indexToVector(dataset[0].inputIndex);
@@ -1257,6 +1371,7 @@ function applySnapshot(snapshot, options = {}) {
     updateTrainingButton();
     setStatus(`Sessão recuperada após o refresh na etapa ${epoch.toLocaleString('pt-BR')}; treinamento retomado.`);
     setLesson('Live Server detectado', 'A página recarregou, mas o último checkpoint foi restaurado porque o treinamento já estava em execução.');
+    queueTransformerTraining();
   }
 }
 
@@ -1593,6 +1708,7 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('beforeunload', () => {
   saveSessionCheckpoint();
+  stopTransformerWorker();
   stopWorkers();
 });
 

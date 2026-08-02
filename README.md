@@ -32,6 +32,8 @@ Demonstrar de forma clara e interativa:
 - Histórico visual de loss e eventos de crescimento
 - Persistência no navegador e importação/exportação completa em JSON
 - KV Cache por cabeça durante a geração do Tiny Transformer
+- Worker dedicado e contador de passos separado para o Tiny Transformer
+- Larguras adaptativas e diferentes por camada na MLP, calculadas a partir do dicionário
 
 O JSON inclui corpus, dicionário, pesos, biases, embeddings, posições, matrizes Q/K/V, feed-forward, métricas e histórico. Ele usa o formato educacional deste projeto e não é diretamente um arquivo TensorFlow ou PyTorch.
 
