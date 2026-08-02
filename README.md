@@ -31,6 +31,7 @@ Demonstrar de forma clara e interativa:
 - Comparação de loss de treino/teste entre MLP e Tiny Transformer
 - Histórico visual de loss e eventos de crescimento
 - Persistência no navegador e importação/exportação completa em JSON
+- KV Cache por cabeça durante a geração do Tiny Transformer
 
 O JSON inclui corpus, dicionário, pesos, biases, embeddings, posições, matrizes Q/K/V, feed-forward, métricas e histórico. Ele usa o formato educacional deste projeto e não é diretamente um arquivo TensorFlow ou PyTorch.
 
