@@ -388,11 +388,12 @@ class TextProcessor {
     const frequencies = new Map();
     this.words.forEach(word => frequencies.set(word, (frequencies.get(word) || 0) + 1));
     this.corpusVocabulary = new Set(frequencies.keys());
+    const originalVocabulary = [...frequencies.keys()];
     const rankedVocabulary = [...frequencies].sort((a, b) => b[1] - a[1]).map(([word]) => word);
     this.vocabWasReduced = rankedVocabulary.length > MAX_DICTIONARY_SIZE;
     this.vocab = this.vocabWasReduced
       ? [...rankedVocabulary.slice(0, MAX_DICTIONARY_SIZE - 1), '<unk>']
-      : rankedVocabulary;
+      : originalVocabulary;
     this.vocabSize = this.vocab.length;
     this.wordIndex = new Map(this.vocab.map((word, index) => [word, index]));
     this.unknownIndex = this.wordIndex.get('<unk>') ?? -1;
@@ -1016,7 +1017,8 @@ async function performParallelRound() {
     visualInput = processor.indexToVector(sample.inputIndex);
     const roundLoss = results.reduce((sum, result) => sum + result.meanLoss, 0) / results.length;
     updateLossEstimate(roundLoss);
-    results.forEach(result => {
+    const transformerUpdateLimit = processor.vocabSize > 512 ? 1 : processor.vocabSize > 128 ? 2 : 4;
+    results.slice(0, transformerUpdateLimit).forEach(result => {
       const attentionSample = dataset[result.sampleIndex];
       const output = attentionNetwork.train(attentionSample.contextIndices, attentionSample.targetIndex).output;
       const loss = -Math.log(Math.max(output[attentionSample.targetIndex], 1e-12));
