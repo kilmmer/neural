@@ -782,8 +782,8 @@ function updateMetrics() {
   elements.mlpTestLoss.textContent = mlpTestLoss === null ? '—' : mlpTestLoss.toFixed(3);
   elements.attentionTrainLoss.textContent = attentionEvaluatedTrainLoss === null ? '—' : attentionEvaluatedTrainLoss.toFixed(3);
   elements.attentionTestLoss.textContent = attentionTestLoss === null ? '—' : attentionTestLoss.toFixed(3);
-  elements.mlpStopStatus.textContent = mlpStop.stopped ? `Parou · ${mlpStop.reason}` : `${mlpStop.patience} / ${config.earlyStopPatience}`;
-  elements.transformerStopStatus.textContent = transformerStop.stopped ? `Parou · ${transformerStop.reason}` : `${transformerStop.patience} / ${config.earlyStopPatience}`;
+  elements.mlpStopStatus.textContent = mlpStop.stopped ? `Parou · ${mlpStop.reason}` : `${Math.min(mlpStop.patience, config.earlyStopPatience)} / ${config.earlyStopPatience}`;
+  elements.transformerStopStatus.textContent = transformerStop.stopped ? `Parou · ${transformerStop.reason}` : `${Math.min(transformerStop.patience, config.earlyStopPatience)} / ${config.earlyStopPatience}`;
   elements.stagnation.textContent = `${stagnation} / ${config.patienceLimit}`;
   elements.bar.style.width = `${Math.min(100, stagnation / config.patienceLimit * 100)}%`;
   updateGrowthExplanation();
