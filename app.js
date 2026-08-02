@@ -400,8 +400,11 @@ let animationUntil = 0;
 let attentionLoss = null;
 let mlpTestLoss = null;
 let attentionTestLoss = null;
+let mlpEvaluatedTrainLoss = null;
+let attentionEvaluatedTrainLoss = null;
 let lossHistory = [];
 let growthHistory = [];
+let lastGrowthEpoch = 0;
 const STORAGE_KEY = 'neural-lab-model-v2';
 
 function cssColor(name) {
@@ -468,6 +471,11 @@ function updateGrowthExplanation() {
     elements.growthRule.textContent = 'Loss abaixo do alvo: crescimento não é necessário.';
     return;
   }
+  const adaptationRemaining = Math.max(0, Math.max(128, dataset.length * 2) - (epoch - lastGrowthEpoch));
+  if (adaptationRemaining > 0) {
+    elements.growthRule.textContent = `Adaptação estrutural: mais ${adaptationRemaining} exemplos antes de avaliar crescimento.`;
+    return;
+  }
   const remaining = Math.max(0, config.patienceLimit - stagnation);
   elements.growthRule.textContent = `${remaining} avaliações sem melhora até o próximo crescimento.`;
 }
@@ -479,9 +487,9 @@ function updateMetrics() {
   elements.layers.textContent = network?.hiddenLayerCount ?? '—';
   elements.workers.textContent = workerPool.length;
   elements.splitCount.textContent = dataset.length ? `${dataset.length} / ${testDataset.length}` : '—';
-  elements.mlpTrainLoss.textContent = displayedLoss === null ? '—' : displayedLoss.toFixed(3);
+  elements.mlpTrainLoss.textContent = mlpEvaluatedTrainLoss === null ? '—' : mlpEvaluatedTrainLoss.toFixed(3);
   elements.mlpTestLoss.textContent = mlpTestLoss === null ? '—' : mlpTestLoss.toFixed(3);
-  elements.attentionTrainLoss.textContent = attentionLoss === null ? '—' : attentionLoss.toFixed(3);
+  elements.attentionTrainLoss.textContent = attentionEvaluatedTrainLoss === null ? '—' : attentionEvaluatedTrainLoss.toFixed(3);
   elements.attentionTestLoss.textContent = attentionTestLoss === null ? '—' : attentionTestLoss.toFixed(3);
   elements.stagnation.textContent = `${stagnation} / ${config.patienceLimit}`;
   elements.bar.style.width = `${Math.min(100, stagnation / config.patienceLimit * 100)}%`;
@@ -615,8 +623,11 @@ function prepareCorpus() {
   attentionLoss = null;
   mlpTestLoss = null;
   attentionTestLoss = null;
+  mlpEvaluatedTrainLoss = null;
+  attentionEvaluatedTrainLoss = null;
   lossHistory = [];
   growthHistory = [];
+  lastGrowthEpoch = 0;
   stepsSinceEvaluation = 0;
   paused = true;
   visualInput = null;
@@ -679,6 +690,13 @@ function addGrowthEvent(text) {
 }
 
 function updateGrowth(loss) {
+  const adaptationSteps = Math.max(128, dataset.length * 2);
+  if (epoch - lastGrowthEpoch < adaptationSteps) {
+    bestLoss = Math.min(bestLoss, loss);
+    stagnation = 0;
+    return;
+  }
+
   if (loss < bestLoss - config.improvementDelta) {
     bestLoss = loss;
     stagnation = 0;
@@ -701,6 +719,7 @@ function updateGrowth(loss) {
     const message = `Loss estagnada: o neurônio ${donorIndex + 1} foi dividido com o novo neurônio ${neuronIndex + 1}; entradas herdadas e pesos de saída redistribuídos.`;
     addGrowthEvent(`+ neurônio ${neuronIndex + 1} · conexões rebalanceadas`);
     growthHistory.push({ epoch, type: 'neuron', layer: layerIndex });
+    lastGrowthEpoch = epoch;
     setLesson('A rede ganhou capacidade', message);
   } else if (network.hiddenLayerCount < config.maxHiddenLayers) {
     const insertedSize = network.addHiddenLayer(config.newLayerSize);
@@ -710,6 +729,7 @@ function updateGrowth(loss) {
     const message = `A camada anterior atingiu ${config.maxNeuronsPerLayer} neurônios; nasceu a camada oculta ${layerIndex} com ${insertedSize} neurônios e uma transformação próxima da identidade.`;
     addGrowthEvent(`+ camada ${layerIndex} · ${insertedSize} neurônios preservados`);
     growthHistory.push({ epoch, type: 'layer', layer: layerIndex });
+    lastGrowthEpoch = epoch;
     setLesson('Nova camada criada', message);
   } else {
     stagnation = config.patienceLimit;
@@ -721,12 +741,12 @@ function updateGrowth(loss) {
   bestLoss = loss;
 }
 
-function crossEntropy(model, samples, kind, limit = 24) {
+function crossEntropy(model, samples, kind, limit = 32) {
   if (!model || !samples.length) return null;
   const stride = Math.max(1, Math.floor(samples.length / limit));
   let total = 0;
   let count = 0;
-  for (let index = epoch % stride; index < samples.length && count < limit; index += stride) {
+  for (let index = 0; index < samples.length && count < limit; index += stride) {
     const sample = samples[index];
     const output = kind === 'attention'
       ? model.forward(sample.contextIndices).output
@@ -737,11 +757,12 @@ function crossEntropy(model, samples, kind, limit = 24) {
   return count ? total / count : null;
 }
 
-function recordHistory() {
-  if (!network || !attentionNetwork || epoch % config.evaluationEvery !== 0) return;
+function recordHistory(evaluated = false) {
+  if (!network || !attentionNetwork || !evaluated) return;
+  attentionEvaluatedTrainLoss = crossEntropy(attentionNetwork, dataset, 'attention');
   mlpTestLoss = crossEntropy(network, testDataset, 'mlp');
   attentionTestLoss = crossEntropy(attentionNetwork, testDataset, 'attention');
-  lossHistory.push({ epoch, mlpTrain: displayedLoss, mlpTest: mlpTestLoss, attentionTrain: attentionLoss, attentionTest: attentionTestLoss });
+  lossHistory.push({ epoch, mlpTrain: mlpEvaluatedTrainLoss, mlpTest: mlpTestLoss, attentionTrain: attentionEvaluatedTrainLoss, attentionTest: attentionTestLoss });
   if (lossHistory.length > 160) lossHistory.shift();
   drawHistory();
 }
@@ -797,11 +818,14 @@ function updateLearningPanel(sample, prediction) {
 function finishTrainingSteps(completedSteps) {
   epoch += completedSteps;
   stepsSinceEvaluation += completedSteps;
+  let evaluated = false;
   if (stepsSinceEvaluation >= config.evaluationEvery) {
     stepsSinceEvaluation %= config.evaluationEvery;
-    updateGrowth(displayedLoss);
+    mlpEvaluatedTrainLoss = crossEntropy(network, dataset, 'mlp');
+    updateGrowth(mlpEvaluatedTrainLoss);
+    evaluated = true;
   }
-  recordHistory();
+  recordHistory(evaluated);
   updateMetrics();
 }
 
@@ -974,7 +998,7 @@ function createSnapshot() {
     contextSize: Number(elements.contextSize.value),
     vocabulary: processor.vocab,
     split: { strategy: '80/20 determinístico; cada quinto exemplo vai para teste', train: dataset.length, test: testDataset.length },
-    metrics: { epoch, bestLoss, displayedLoss, attentionLoss, mlpTestLoss, attentionTestLoss, stagnation },
+    metrics: { epoch, bestLoss, displayedLoss, attentionLoss, mlpTestLoss, attentionTestLoss, mlpEvaluatedTrainLoss, attentionEvaluatedTrainLoss, stagnation, lastGrowthEpoch },
     history: lossHistory,
     growthHistory,
     mlp: serializeNetwork(),
@@ -990,7 +1014,7 @@ function applySnapshot(snapshot) {
   if (!prepareCorpus()) throw new Error('O corpus salvo não produz exemplos suficientes.');
   network = restoreMlp(snapshot.mlp);
   attentionNetwork = AttentionNetwork.restore(snapshot.attention);
-  ({ epoch = 0, bestLoss = Infinity, displayedLoss = null, attentionLoss = null, mlpTestLoss = null, attentionTestLoss = null, stagnation = 0 } = snapshot.metrics || {});
+  ({ epoch = 0, bestLoss = Infinity, displayedLoss = null, attentionLoss = null, mlpTestLoss = null, attentionTestLoss = null, mlpEvaluatedTrainLoss = null, attentionEvaluatedTrainLoss = null, stagnation = 0, lastGrowthEpoch = 0 } = snapshot.metrics || {});
   lossHistory = Array.isArray(snapshot.history) ? snapshot.history : [];
   growthHistory = Array.isArray(snapshot.growthHistory) ? snapshot.growthHistory : [];
   visualInput = processor.indexToVector(dataset[0].inputIndex);
