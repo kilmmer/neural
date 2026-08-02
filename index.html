@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="pt-BR">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,11 +8,16 @@
   <title>Rede Neural Evolutiva</title>
   <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
   <main class="app-shell">
     <aside class="sidebar" aria-label="Controles da rede neural">
       <header class="brand">
-        <div class="brand-top"><p class="eyebrow">Laboratório educacional</p><button id="themeToggle" class="theme-toggle" type="button" aria-label="Ativar modo escuro" aria-pressed="false"><span aria-hidden="true">◐</span><span>Tema escuro</span></button></div>
+        <div class="brand-top">
+          <p class="eyebrow">Laboratório educacional</p><button id="themeToggle" class="theme-toggle" type="button"
+            aria-label="Ativar modo escuro" aria-pressed="false"><span aria-hidden="true">◐</span><span>Tema
+              escuro</span></button>
+        </div>
         <h1>Rede Neural<br>Evolutiva</h1>
         <p>Uma rede de próxima palavra que expande a camada oculta quando o aprendizado estabiliza.</p>
       </header>
@@ -22,19 +28,42 @@
           <h2 id="training-title">Treinamento</h2>
         </div>
         <label for="corpusText">Corpus de texto</label>
-        <textarea id="corpusText" spellcheck="false" placeholder="Cole aqui o texto que a rede deve aprender..."></textarea>
+        <textarea id="corpusText" spellcheck="false"
+          placeholder="Cole aqui o texto que a rede deve aprender..."></textarea>
         <p class="field-hint">Cada palavra ensina a rede a prever a palavra seguinte.</p>
+        <label class="execution-control" for="contextSize"><span>Contexto</span><select id="contextSize">
+            <option value="2">2 palavras</option>
+            <option value="3" selected>3 palavras</option>
+            <option value="4">4 palavras</option>
+            <option value="5">5 palavras</option>
+          </select></label>
         <div class="button-row">
           <button id="restartButton" class="button button-secondary" type="button">Reiniciar rede</button>
           <button id="pauseButton" class="button button-primary" type="button" aria-pressed="true">Iniciar</button>
         </div>
         <div class="explore-controls">
           <button id="stepButton" class="button button-secondary" type="button">Avançar 1 passo</button>
-          <label class="speed-control" for="speedSelect"><span>Velocidade</span><select id="speedSelect"><option value="700">Lenta</option><option value="400" selected>Didática</option><option value="150">Rápida</option></select></label>
+          <label class="speed-control" for="speedSelect"><span>Velocidade</span><select id="speedSelect">
+              <option value="700">Lenta</option>
+              <option value="400" selected>Didática</option>
+              <option value="150">Rápida</option>
+            </select></label>
         </div>
-        <label class="execution-control" for="executionMode"><span>Execução</span><select id="executionMode"><option value="1">Local · 1 thread</option><option value="2" selected>Paralela · 2 workers</option><option value="4">Paralela · 4 workers</option></select></label>
+        <label class="execution-control" for="executionMode"><span>Execução</span><select id="executionMode">
+            <option value="1">Local · 1 thread</option>
+            <option value="2" selected>Paralela · 2 workers</option>
+            <option value="4">Paralela · 4 workers</option>
+            <option value="8">Paralela · 8 workers</option>
+          </select></label>
         <p id="workerStatus" class="worker-status">2 workers mantêm o treinamento fora da thread da interface.</p>
         <p id="statusMessage" class="status-message" role="status" aria-live="polite"></p>
+        <div class="model-actions" aria-label="Persistência do modelo">
+          <button id="saveButton" class="button button-secondary" type="button">Salvar</button>
+          <button id="loadButton" class="button button-secondary" type="button">Carregar</button>
+          <button id="exportButton" class="button button-secondary" type="button">Exportar JSON</button>
+          <button id="importButton" class="button button-secondary" type="button">Importar JSON</button>
+          <input id="importFile" class="visually-hidden" type="file" accept="application/json,.json">
+        </div>
       </section>
 
       <section class="panel stats-panel" aria-labelledby="metrics-title">
@@ -43,15 +72,36 @@
           <h2 id="metrics-title">Métricas</h2>
         </div>
         <dl class="stats">
-          <div><dt>Épocas</dt><dd id="epochDisplay">0</dd></div>
-          <div><dt>Loss suavizada</dt><dd id="lossDisplay">—</dd></div>
-          <div><dt>Neurônios ocultos</dt><dd id="neuronCount">—</dd></div>
-          <div><dt>Camadas ocultas</dt><dd id="layerCount">—</dd></div>
-          <div><dt>Workers ativos</dt><dd id="workerCount">0</dd></div>
+          <div>
+            <dt>Épocas</dt>
+            <dd id="epochDisplay">0</dd>
+          </div>
+          <div>
+            <dt>Loss suavizada</dt>
+            <dd id="lossDisplay">—</dd>
+          </div>
+          <div>
+            <dt>Neurônios ocultos</dt>
+            <dd id="neuronCount">—</dd>
+          </div>
+          <div>
+            <dt>Camadas ocultas</dt>
+            <dd id="layerCount">—</dd>
+          </div>
+          <div>
+            <dt>Workers ativos</dt>
+            <dd id="workerCount">0</dd>
+          </div>
+          <div>
+            <dt>Treino / teste</dt>
+            <dd id="splitCount">—</dd>
+          </div>
         </dl>
         <div class="stagnation">
           <div><span>Estagnação</span><span id="stagnationDisplay">0 / 8</span></div>
-          <div class="progress-bar" aria-hidden="true"><div id="patienceBar" class="progress-fill"></div></div>
+          <div class="progress-bar" aria-hidden="true">
+            <div id="patienceBar" class="progress-fill"></div>
+          </div>
           <p id="growthRule" class="metric-note">A rede cresce após 8 avaliações sem melhora.</p>
         </div>
       </section>
@@ -61,17 +111,26 @@
           <span class="step">03</span>
           <h2 id="generate-title">Gerar sequência</h2>
         </div>
-        <label for="seedWord">Palavra inicial</label>
-        <input id="seedWord" type="text" placeholder="Digite uma palavra do corpus" autocomplete="off">
+        <label for="seedWord">Contexto inicial</label>
+        <input id="seedWord" type="text" placeholder="Digite uma ou mais palavras do corpus" autocomplete="off">
+        <label class="execution-control" for="generatorModel"><span>Modelo</span><select id="generatorModel">
+            <option value="attention">Embeddings + atenção</option>
+            <option value="mlp">Rede evolutiva</option>
+          </select></label>
         <button id="generateButton" class="button button-primary" type="button">Gerar texto</button>
-        <output id="generatedText" class="generated-text" aria-live="polite">Insira um corpus e inicie o treinamento.</output>
+        <output id="generatedText" class="generated-text" aria-live="polite">Insira um corpus e inicie o
+          treinamento.</output>
       </section>
     </aside>
 
     <section class="visualization" aria-labelledby="visualization-title">
       <header class="visualization-header">
-        <div><p class="eyebrow">Visualização em tempo real</p><h2 id="visualization-title">Arquitetura da rede</h2></div>
-        <div class="legend" aria-label="Legenda das sinapses"><span><i class="legend-positive"></i>Reforço</span><span><i class="legend-negative"></i>Inibição</span></div>
+        <div>
+          <p class="eyebrow">Visualização em tempo real</p>
+          <h2 id="visualization-title">Arquitetura da rede</h2>
+        </div>
+        <div class="legend" aria-label="Legenda das sinapses"><span><i
+              class="legend-positive"></i>Reforço</span><span><i class="legend-negative"></i>Inibição</span></div>
       </header>
       <section class="learning-strip" aria-label="Exemplo atual de treinamento">
         <div><span>Entrada</span><strong id="currentInput">—</strong></div>
@@ -79,20 +138,44 @@
         <div><span>Previsão</span><strong id="currentPrediction">—</strong></div>
         <div><span>Confiança</span><strong id="currentConfidence">—</strong></div>
       </section>
-      <canvas id="networkCanvas" tabindex="0" role="application" aria-label="Visualização interativa da rede neural. Clique em um neurônio para ver seus detalhes."></canvas>
+      <section class="comparison" aria-label="Comparação de arquiteturas">
+        <article>
+          <div><span>Modelo A</span><strong>Rede evolutiva · MLP</strong></div>
+          <p>Treino <b id="mlpTrainLoss">—</b></p>
+          <p>Teste <b id="mlpTestLoss">—</b></p>
+        </article>
+        <article>
+          <div><span>Modelo B</span><strong>Embeddings + atenção</strong></div>
+          <p>Treino <b id="attentionTrainLoss">—</b></p>
+          <p>Teste <b id="attentionTestLoss">—</b></p>
+        </article>
+        <figure>
+          <figcaption>Histórico de loss e crescimento</figcaption><canvas id="historyCanvas"
+            aria-label="Gráfico comparativo de loss"></canvas>
+        </figure>
+      </section>
+      <canvas id="networkCanvas" tabindex="0" role="application"
+        aria-label="Visualização interativa da rede neural. Clique em um neurônio para ver seus detalhes."></canvas>
       <div id="growthLog" class="growth-log" aria-live="polite"></div>
       <div class="insight-grid">
         <section class="neuron-details" aria-labelledby="neuronDetailsTitle" aria-live="polite">
           <p class="eyebrow">Inspeção</p>
-          <div><h3 id="neuronDetailsTitle">Selecione um neurônio</h3><p id="neuronDetailsContent">Clique em um neurônio para ver ativação, bias e conexões.</p></div>
+          <div>
+            <h3 id="neuronDetailsTitle">Selecione um neurônio</h3>
+            <p id="neuronDetailsContent">Clique em um neurônio para ver ativação, bias e conexões.</p>
+          </div>
         </section>
         <section class="teacher-note" aria-labelledby="teacherTitle" aria-live="polite">
           <p class="eyebrow">Entenda o passo</p>
-          <div><h3 id="teacherTitle">Laboratório pronto</h3><p id="teacherText">Insira um corpus e use “Avançar 1 passo” para observar o aprendizado.</p></div>
+          <div>
+            <h3 id="teacherTitle">Laboratório pronto</h3>
+            <p id="teacherText">Insira um corpus e use “Avançar 1 passo” para observar o aprendizado.</p>
+          </div>
         </section>
       </div>
     </section>
   </main>
   <script src="app.js"></script>
 </body>
+
 </html>

@@ -112,7 +112,11 @@ input, select { padding: 9px 10px; }
 .field-hint { margin: 7px 0 0; color: var(--muted); font-size: .74rem; }
 
 .button-row,
-.explore-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.explore-controls,
+.model-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.model-actions { margin-top: 2px; }
+.model-actions .button { margin-top: 6px; padding: 8px; font-size: .7rem; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 .button {
   width: 100%;
@@ -170,6 +174,14 @@ input, select { padding: 9px 10px; }
 .learning-strip span { display: block; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; font-size: .62rem; font-weight: 750; }
 .learning-strip strong { display: block; overflow: hidden; margin-top: 2px; text-overflow: ellipsis; white-space: nowrap; font-size: .82rem; }
 
+.comparison { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(150px, .7fr) minmax(260px, 1.6fr); gap: 8px; margin-top: 8px; }
+.comparison article, .comparison figure { min-width: 0; min-height: 72px; margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
+.comparison article div span, .comparison figcaption { display: block; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-size: .58rem; font-weight: 800; }
+.comparison article strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .72rem; }
+.comparison article p { display: inline-flex; gap: 4px; margin: 7px 10px 0 0; color: var(--muted); font-size: .65rem; }
+.comparison article b { color: var(--text); font-variant-numeric: tabular-nums; }
+#historyCanvas { display: block; width: 100%; height: 48px; margin-top: 3px; }
+
 #networkCanvas { flex: 1; min-height: 0; width: 100%; margin-top: 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); cursor: crosshair; }
 .growth-log { position: absolute; right: 42px; bottom: 136px; color: var(--positive); text-align: right; font-size: .75rem; }
 .growth-log div { margin-top: 4px; }
@@ -188,6 +200,8 @@ input, select { padding: 9px 10px; }
   .learning-strip div:nth-child(3) { border-top: 1px solid var(--line); border-left: 0; }
   .learning-strip div:nth-child(4) { border-top: 1px solid var(--line); }
   .insight-grid { grid-template-columns: 1fr; }
+  .comparison { grid-template-columns: 1fr 1fr; }
+  .comparison figure { grid-column: 1 / -1; }
   .teacher-note { display: none; }
 }
 

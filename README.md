@@ -12,6 +12,8 @@
 
 Este projeto é um **experimento educacional e visual** que demonstra uma **rede neural artificial capaz de crescer dinamicamente** quando o aprendizado entra em estagnação.
 
+O laboratório agora compara duas arquiteturas: a **MLP evolutiva**, que recebe a última palavra, e um modelo de **embeddings + atenção**, que aprende vetores densos e observa de 2 a 5 palavras de contexto. O corpus é separado de forma determinística em **80% para treino e 20% para teste**, permitindo observar generalização e não apenas memorização.
+
 Ele é implementado em **JavaScript puro**, **sem bibliotecas externas**, e roda **100% no navegador**, com foco em **fundamentos de redes neurais, transparência e visualização**.
 
 > ⚠️ Importante: este projeto **não é um LLM**. É apenas uma rede neural **simples e didática**, construída para estudo.
@@ -26,20 +28,23 @@ Demonstrar de forma clara e interativa:
 - Treinamento via **backpropagation**
 - Identificação de **estagnação de aprendizado**
 - Crescimento estrutural automático da rede (**auto-growth**) de neurônios e camadas
+- Comparação de loss de treino/teste entre MLP e atenção
+- Histórico visual de loss e eventos de crescimento
+- Persistência no navegador e importação/exportação completa em JSON
+
+O JSON inclui corpus, vocabulário, pesos, biases, embeddings, vetor de consulta da atenção, métricas e histórico. Ele usa o formato educacional deste projeto e não é diretamente um arquivo TensorFlow ou PyTorch.
 
 ---
 
 ### 🧩 Arquitetura
 
-Entrada (One-Hot Words)
-↓
-Camadas Ocultas (dinâmicas)
-↓
-Saída (Próxima Palavra)
+Modelo A: palavra one-hot → camadas ocultas dinâmicas → próxima palavra
+
+Modelo B: contexto → embeddings → atenção → próxima palavra
 
 - **Entrada**: vetor one-hot da palavra atual  
 - **Saída**: vetor one-hot da próxima palavra  
-- **Modelo**: previsão da próxima palavra (bigrama)
+- **Modelos**: previsão da próxima palavra por bigrama (MLP) e por contexto de 2–5 palavras (atenção)
 
 ---
 
