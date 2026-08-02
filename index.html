@@ -54,6 +54,7 @@
             <option value="2" selected>Paralela · 2 workers</option>
             <option value="4">Paralela · 4 workers</option>
             <option value="8">Paralela · 8 workers</option>
+            <option value="16">Paralela · 16 workers</option>
           </select></label>
         <p id="workerStatus" class="worker-status">2 workers mantêm o treinamento fora da thread da interface.</p>
         <p id="statusMessage" class="status-message" role="status" aria-live="polite"></p>
@@ -117,7 +118,8 @@
             <option value="attention">Embeddings + atenção</option>
             <option value="mlp">Rede evolutiva</option>
           </select></label>
-        <label class="execution-control" for="temperatureSelect"><span>Criatividade</span><select id="temperatureSelect">
+        <label class="execution-control" for="temperatureSelect"><span>Criatividade</span><select
+            id="temperatureSelect">
             <option value="0.65">Precisa</option>
             <option value="0.9" selected>Equilibrada</option>
             <option value="1.15">Exploradora</option>

@@ -406,6 +406,7 @@ let lossHistory = [];
 let growthHistory = [];
 let lastGrowthEpoch = 0;
 const STORAGE_KEY = 'neural-lab-model-v2';
+const SESSION_KEY = 'neural-lab-live-session-v2';
 
 function cssColor(name) {
   if (!cachedColors[name]) cachedColors[name] = getComputedStyle(document.body).getPropertyValue(name).trim();
@@ -1006,7 +1007,7 @@ function createSnapshot() {
   };
 }
 
-function applySnapshot(snapshot) {
+function applySnapshot(snapshot, options = {}) {
   if (snapshot?.format !== 'neural-lab-v2' || !snapshot.corpus || !snapshot.mlp || !snapshot.attention) throw new Error('Arquivo incompatível ou incompleto.');
   stopWorkers();
   elements.corpus.value = snapshot.corpus;
@@ -1026,6 +1027,54 @@ function applySnapshot(snapshot) {
   markRenderDirty();
   setStatus(`Modelo carregado na época ${epoch.toLocaleString('pt-BR')}. O treinamento permanece pausado.`);
   setLesson('Estado restaurado', 'Corpus, vocabulário, duas arquiteturas, pesos, embeddings, métricas e histórico voltaram ao ponto salvo.');
+
+  if (options.resume) {
+    paused = false;
+    lastTrainingAt = performance.now();
+    updateTrainingButton();
+    setStatus(`Sessão recuperada após o refresh na etapa ${epoch.toLocaleString('pt-BR')}; treinamento retomado.`);
+    setLesson('Live Server detectado', 'A página recarregou, mas o último checkpoint foi restaurado porque o treinamento já estava em execução.');
+  }
+}
+
+function saveSessionCheckpoint() {
+  try {
+    if (!network || !attentionNetwork) {
+      localStorage.removeItem(SESSION_KEY);
+      return false;
+    }
+    localStorage.setItem(SESSION_KEY, JSON.stringify({
+      snapshot: createSnapshot(),
+      wasRunning: !paused,
+      executionMode: requestedWorkerCount,
+      trainingInterval: config.trainingInterval,
+    }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function restoreSessionCheckpoint() {
+  try {
+    const saved = localStorage.getItem(SESSION_KEY);
+    if (!saved) return false;
+    const checkpoint = JSON.parse(saved);
+    if (!checkpoint.snapshot) return false;
+    if ([1, 2, 4].includes(checkpoint.executionMode)) {
+      elements.execution.value = String(checkpoint.executionMode);
+      configureExecutionMode();
+    }
+    if ([150, 400, 700].includes(checkpoint.trainingInterval)) {
+      config.trainingInterval = checkpoint.trainingInterval;
+      elements.speed.value = String(checkpoint.trainingInterval);
+    }
+    applySnapshot(checkpoint.snapshot, { resume: checkpoint.wasRunning === true });
+    return true;
+  } catch {
+    try { localStorage.removeItem(SESSION_KEY); } catch { /* Armazenamento indisponível. */ }
+    return false;
+  }
 }
 
 function saveModel() {
@@ -1309,10 +1358,17 @@ elements.theme.addEventListener('click', () => {
   try { localStorage.setItem('neural-theme', theme); } catch { /* Preferência ficará apenas na sessão. */ }
 });
 window.addEventListener('resize', () => { resizeCanvas(); drawHistory(); });
-window.addEventListener('beforeunload', stopWorkers);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') saveSessionCheckpoint();
+});
+window.addEventListener('beforeunload', () => {
+  saveSessionCheckpoint();
+  stopWorkers();
+});
 
 applyTheme(getInitialTheme());
 resizeCanvas();
 configureExecutionMode();
 prepareCorpus();
+restoreSessionCheckpoint();
 requestAnimationFrame(animate);
