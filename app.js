@@ -173,16 +173,24 @@ class NeuralNetwork {
   }
 }
 
+const MAX_CORPUS_TOKENS = 5000;
+
 class TextProcessor {
   constructor(text) {
-    this.words = text.toLocaleLowerCase('pt-BR').match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu) ?? [];
+    const parsedWords = text.toLocaleLowerCase('pt-BR').match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu) ?? [];
+    this.wasTruncated = parsedWords.length > MAX_CORPUS_TOKENS;
+    this.words = parsedWords.slice(0, MAX_CORPUS_TOKENS);
     this.vocab = [...new Set(this.words)];
     this.vocabSize = this.vocab.length;
+    this.wordIndex = new Map(this.vocab.map((word, index) => [word, index]));
   }
 
   wordToVector(word) {
+    return this.indexToVector(this.wordIndex.get(word) ?? -1);
+  }
+
+  indexToVector(index) {
     const vector = Array(this.vocabSize).fill(0);
-    const index = this.vocab.indexOf(word);
     if (index >= 0) vector[index] = 1;
     return vector;
   }
@@ -194,8 +202,8 @@ class TextProcessor {
 
   generateData() {
     return this.words.slice(0, -1).map((word, index) => ({
-      input: this.wordToVector(word),
-      target: this.wordToVector(this.words[index + 1]),
+      inputIndex: this.wordIndex.get(word),
+      targetIndex: this.wordIndex.get(this.words[index + 1]),
       inputWord: word,
       targetWord: this.words[index + 1],
     }));
@@ -245,6 +253,9 @@ const config = {
   maxNeuronsPerLayer: 8,
   maxHiddenLayers: 3,
   newLayerSize: 4,
+  evaluationSampleLimit: 32,
+  maxVisualNodesPerLayer: 56,
+  drawInterval: 33,
 };
 
 let processor;
@@ -264,14 +275,21 @@ let neuronHitAreas = [];
 let selectedNeuron = null;
 let selectedNeuronEpoch = -1;
 let workerPool = [];
-let requestedWorkerCount = 1;
+let requestedWorkerCount = 2;
 let workerRoundId = 0;
 let parallelBusy = false;
 let stepsSinceEvaluation = 0;
+let renderDirty = true;
+let lastDrawAt = 0;
+let cachedColors = {};
+let animationUntil = 0;
 
 function cssColor(name) {
-  return getComputedStyle(document.body).getPropertyValue(name).trim();
+  if (!cachedColors[name]) cachedColors[name] = getComputedStyle(document.body).getPropertyValue(name).trim();
+  return cachedColors[name];
 }
+
+function markRenderDirty() { renderDirty = true; }
 
 function setStatus(message = '') {
   elements.status.textContent = message;
@@ -294,6 +312,8 @@ function applyTheme(theme) {
   elements.theme.setAttribute('aria-pressed', String(isDark));
   elements.theme.setAttribute('aria-label', isDark ? 'Ativar modo claro' : 'Ativar modo escuro');
   elements.theme.lastElementChild.textContent = isDark ? 'Tema claro' : 'Tema escuro';
+  cachedColors = {};
+  markRenderDirty();
 }
 
 function getInitialTheme() {
@@ -347,8 +367,8 @@ function serializeNetwork() {
   return {
     layerSizes: [...network.layerSizes],
     learningRate: network.learningRate,
-    weights: network.weights.map(matrix => matrix.data.map(row => [...row])),
-    biases: network.biases.map(matrix => matrix.data.map(row => [...row])),
+    weights: network.weights.map(matrix => matrix.data),
+    biases: network.biases.map(matrix => matrix.data),
   };
 }
 
@@ -431,7 +451,8 @@ function requestWorkerTraining(worker, workerId, roundId, sampleIndex, state) {
 }
 
 function configureExecutionMode() {
-  requestedWorkerCount = Number(elements.execution.value);
+  const selectedCount = Number(elements.execution.value);
+  requestedWorkerCount = [1, 2, 4].includes(selectedCount) ? selectedCount : 1;
   stopWorkers();
   if (requestedWorkerCount === 1) {
     elements.step.textContent = 'Avançar 1 passo';
@@ -459,7 +480,9 @@ function prepareCorpus() {
   visualInput = null;
   lastTrainingAt = 0;
   growthAnimation = null;
+  animationUntil = 0;
   neuronHitAreas = [];
+  markRenderDirty();
   stopWorkers();
   elements.growthLog.replaceChildren();
   elements.generated.textContent = 'Insira um corpus e inicie o treinamento.';
@@ -472,26 +495,34 @@ function prepareCorpus() {
     setStatus('Insira um corpus com ao menos duas palavras para iniciar.');
     return false;
   }
-  setStatus(`Corpus preparado: ${dataset.length} pares e ${processor.vocabSize} palavras únicas.`);
+  const truncationNotice = processor.wasTruncated ? ` Limite de ${MAX_CORPUS_TOKENS} tokens aplicado para proteger o navegador.` : '';
+  setStatus(`Corpus preparado: ${dataset.length} pares e ${processor.vocabSize} palavras únicas.${truncationNotice}`);
   setLesson('Corpus transformado em pares', `A rede estudará ${dataset.length} exemplos do tipo “palavra atual → próxima palavra”.`);
   return true;
 }
 
 function evaluateLoss() {
-  const total = dataset.reduce((sum, sample) => {
-    const output = network.feedForward(sample.input).output;
-    const targetIndex = sample.target.indexOf(1);
-    return sum - Math.log(Math.max(output[targetIndex], 1e-12));
-  }, 0);
-  return total / dataset.length;
+  const sampleLimit = Math.min(dataset.length, config.evaluationSampleLimit);
+  const stride = Math.max(1, Math.floor(dataset.length / sampleLimit));
+  let total = 0;
+  let evaluated = 0;
+  for (let index = 0; index < dataset.length && evaluated < sampleLimit; index += stride) {
+    const sample = dataset[index];
+    const output = network.feedForward(processor.indexToVector(sample.inputIndex)).output;
+    total -= Math.log(Math.max(output[sample.targetIndex], 1e-12));
+    evaluated++;
+  }
+  return total / evaluated;
 }
 
 function initializeNetwork() {
   if (dataset.length === 0) return false;
   const initialHidden = Math.min(5, processor.vocabSize);
   network = new NeuralNetwork([processor.vocabSize, initialHidden, processor.vocabSize]);
-  visualInput = dataset[0].input;
+  visualInput = processor.indexToVector(dataset[0].inputIndex);
   formationStartedAt = performance.now();
+  animationUntil = formationStartedAt + 12000;
+  markRenderDirty();
   displayedLoss = evaluateLoss();
   bestLoss = displayedLoss;
   updateMetrics();
@@ -531,6 +562,7 @@ function updateGrowth(loss) {
     network.addNeuronToLayer(layerIndex);
     const neuronIndex = network.layerSizes[layerIndex] - 1;
     growthAnimation = { type: 'neuron', layerIndex, neuronIndex, startedAt: performance.now() };
+    animationUntil = performance.now() + 1200;
     const message = `Loss estagnada: novo neurônio na camada ${layerIndex}.`;
     addGrowthEvent(`+ neurônio · camada ${layerIndex}`);
     setLesson('A rede ganhou capacidade', message);
@@ -538,6 +570,7 @@ function updateGrowth(loss) {
     network.addHiddenLayer(config.newLayerSize);
     const layerIndex = network.lastHiddenIndex;
     growthAnimation = { type: 'layer', layerIndex, startedAt: performance.now() };
+    animationUntil = performance.now() + config.newLayerSize * 110 + 1000;
     const message = `A camada anterior atingiu ${config.maxNeuronsPerLayer} neurônios; nasceu a camada oculta ${layerIndex}.`;
     addGrowthEvent(`+ camada ${layerIndex} · ${config.newLayerSize} neurônios`);
     setLesson('Nova camada criada', message);
@@ -556,6 +589,7 @@ function updateLearningPanel(sample, prediction) {
   elements.currentTarget.textContent = sample.targetWord;
   elements.currentPrediction.textContent = prediction.word;
   elements.currentConfidence.textContent = `${(prediction.confidence * 100).toFixed(1)}%`;
+  markRenderDirty();
 
   if (prediction.word === sample.targetWord) {
     setLesson('A rede acertou antes do ajuste', `Para “${sample.inputWord}”, a maior saída já era “${sample.targetWord}”. O treino reforçou esse caminho.`);
@@ -578,10 +612,12 @@ function finishTrainingSteps(completedSteps) {
 function performTrainingStep() {
   if (!network) return;
   const sample = dataset[Math.floor(Math.random() * dataset.length)];
-  visualInput = sample.input;
-  const beforeTraining = network.feedForward(sample.input).output;
+  const input = processor.indexToVector(sample.inputIndex);
+  const target = processor.indexToVector(sample.targetIndex);
+  visualInput = input;
+  const beforeTraining = network.feedForward(input).output;
   const prediction = processor.vectorToWord(beforeTraining);
-  network.train(sample.input, sample.target);
+  network.train(input, target);
   updateLearningPanel(sample, prediction);
   finishTrainingSteps(1);
 }
@@ -606,7 +642,7 @@ async function performParallelRound() {
     applyAveragedNetworks(results.map(result => result.network));
     const representative = results[0];
     const sample = dataset[representative.sampleIndex];
-    visualInput = sample.input;
+    visualInput = processor.indexToVector(sample.inputIndex);
     updateLearningPanel(sample, processor.vectorToWord(representative.prediction));
     setLesson('Rodada paralela concluída', `${results.length} workers processaram exemplos simultaneamente. Os pesos resultantes foram combinados pela média.`);
     finishTrainingSteps(results.length);
@@ -680,12 +716,13 @@ function generateStory() {
   }
   elements.generated.append('…');
   visualInput = processor.wordToVector(seed);
+  markRenderDirty();
   setStatus('Sequência gerada com o estado atual da rede.');
 }
 
 function updateNeuronDetails() {
   if (!selectedNeuron || !network) return;
-  const input = visualInput || dataset[0].input;
+  const input = visualInput || processor.indexToVector(dataset[0].inputIndex);
   const result = network.feedForward(input);
   const { layer, layerIndex, index } = selectedNeuron;
   let title;
@@ -717,10 +754,11 @@ function updateNeuronDetails() {
 
 function resizeCanvas() {
   const rect = elements.canvas.getBoundingClientRect();
-  const ratio = window.devicePixelRatio || 1;
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
   elements.canvas.width = Math.max(1, Math.floor(rect.width * ratio));
   elements.canvas.height = Math.max(1, Math.floor(rect.height * ratio));
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  markRenderDirty();
 }
 
 function drawEmptyState(width, height) {
@@ -732,15 +770,27 @@ function drawEmptyState(width, height) {
   ctx.fillText('Insira um corpus e clique em Iniciar ou Avançar 1 passo', width / 2, height / 2 + 16);
 }
 
-function formationVisibility(now) {
+function getDisplayIndices(size, layerIndex, values) {
+  const limit = config.maxVisualNodesPerLayer;
+  if (size <= limit) return Array.from({ length: size }, (_, index) => index);
+  const indices = Array.from({ length: limit }, (_, index) => Math.round(index * (size - 1) / (limit - 1)));
+  const strongest = values.reduce((best, value, index) => value > values[best] ? index : best, 0);
+  const important = [strongest];
+  if (selectedNeuron?.layerIndex === layerIndex) important.push(selectedNeuron.index);
+  if (growthAnimation?.layerIndex === layerIndex && growthAnimation.neuronIndex !== undefined) important.push(growthAnimation.neuronIndex);
+  important.forEach((index, offset) => { indices[indices.length - 1 - offset] = index; });
+  return [...new Set(indices)].sort((a, b) => a - b);
+}
+
+function formationVisibility(now, displayCounts) {
   const elapsed = now - formationStartedAt;
   const starts = [0];
-  for (let layer = 1; layer < network.layerSizes.length; layer++) {
+  for (let layer = 1; layer < displayCounts.length; layer++) {
     const previousDelay = layer === 1 ? 72 : 105;
-    starts[layer] = starts[layer - 1] + network.layerSizes[layer - 1] * previousDelay + 180;
+    starts[layer] = starts[layer - 1] + displayCounts[layer - 1] * previousDelay + 180;
   }
-  const visible = network.layerSizes.map((size, layer) => {
-    const delay = layer === 0 || layer === network.layerSizes.length - 1 ? 72 : 130;
+  const visible = displayCounts.map((size, layer) => {
+    const delay = layer === 0 || layer === displayCounts.length - 1 ? 72 : 130;
     return Math.min(size, Math.max(0, Math.floor((elapsed - starts[layer]) / delay) + 1));
   });
   return { elapsed, starts, visible };
@@ -765,9 +815,12 @@ function drawNetwork(now) {
     return;
   }
 
-  const input = visualInput || dataset[0].input;
+  const input = visualInput || processor.indexToVector(dataset[0].inputIndex);
   const result = network.feedForward(input);
   const layerCount = network.layerSizes.length;
+  const displayIndices = network.layerSizes.map((size, layer) => (
+    getDisplayIndices(size, layer, layer === 0 ? input : result.activations[layer])
+  ));
   const xPositions = Array.from({ length: layerCount }, (_, layer) => (
     58 + (width - 116) * layer / (layerCount - 1)
   ));
@@ -776,7 +829,7 @@ function drawNetwork(now) {
     const spacing = Math.min(available / Math.max(total, 1), 32);
     return 48 + (available - spacing * total) / 2 + index * spacing + spacing / 2;
   };
-  const { elapsed, starts, visible } = formationVisibility(now);
+  const { elapsed, starts, visible } = formationVisibility(now, displayIndices.map(indices => indices.length));
 
   const drawSynapse = (x1, y1, x2, y2, weight, opacity) => {
     if (Math.abs(weight) < 0.2 || opacity <= 0) return;
@@ -793,19 +846,21 @@ function drawNetwork(now) {
 
   for (let layer = 0; layer < layerCount - 1; layer++) {
     const edgeStart = Math.max(
-      starts[layer] + network.layerSizes[layer] * 72,
-      starts[layer + 1] + network.layerSizes[layer + 1] * 72,
+      starts[layer] + displayIndices[layer].length * 72,
+      starts[layer + 1] + displayIndices[layer + 1].length * 72,
     ) + 120;
     const formationOpacity = Math.max(0, Math.min(1, (elapsed - edgeStart) / 750));
-    for (let target = 0; target < visible[layer + 1]; target++) {
-      for (let source = 0; source < visible[layer]; source++) {
+    for (let targetPosition = 0; targetPosition < visible[layer + 1]; targetPosition++) {
+      const target = displayIndices[layer + 1][targetPosition];
+      for (let sourcePosition = 0; sourcePosition < visible[layer]; sourcePosition++) {
+        const source = displayIndices[layer][sourcePosition];
         const targetGrowth = growthProgress(now, layer + 1, target);
         const sourceGrowth = growthProgress(now, layer, source);
         drawSynapse(
           xPositions[layer],
-          nodeY(network.layerSizes[layer], source),
+          nodeY(displayIndices[layer].length, sourcePosition),
           xPositions[layer + 1],
-          nodeY(network.layerSizes[layer + 1], target),
+          nodeY(displayIndices[layer + 1].length, targetPosition),
           network.weights[layer].data[target][source],
           formationOpacity * Math.min(targetGrowth, sourceGrowth),
         );
@@ -824,11 +879,12 @@ function drawNetwork(now) {
     ctx.font = '700 10px system-ui';
     ctx.fillText(`${label} · ${network.layerSizes[layer]}`, xPositions[layer], 22);
 
-    for (let index = 0; index < visible[layer]; index++) {
+    for (let position = 0; position < visible[layer]; position++) {
+      const index = displayIndices[layer][position];
       const value = values[index] ?? 0;
       const progress = growthProgress(now, layer, index);
       const radius = (isInput || isOutput ? 3.2 : 4.3) * (0.25 + progress * 0.75);
-      const y = nodeY(network.layerSizes[layer], index);
+      const y = nodeY(displayIndices[layer].length, position);
       ctx.beginPath();
       ctx.arc(xPositions[layer], y, radius, 0, Math.PI * 2);
       ctx.fillStyle = !isInput && !isOutput
@@ -876,11 +932,17 @@ function selectNeuron(event) {
   selectedNeuron = { layer: hit.layer, layerIndex: hit.layerIndex, index: hit.index };
   selectedNeuronEpoch = -1;
   updateNeuronDetails();
+  markRenderDirty();
 }
 
 function animate(now) {
   trainFrame(now);
-  drawNetwork(now);
+  const animationActive = now < animationUntil || Boolean(growthAnimation);
+  if ((renderDirty || animationActive) && now - lastDrawAt >= config.drawInterval) {
+    drawNetwork(now);
+    renderDirty = false;
+    lastDrawAt = now;
+  }
   requestAnimationFrame(animate);
 }
 
@@ -904,5 +966,6 @@ window.addEventListener('beforeunload', stopWorkers);
 
 applyTheme(getInitialTheme());
 resizeCanvas();
+configureExecutionMode();
 prepareCorpus();
 requestAnimationFrame(animate);

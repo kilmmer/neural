@@ -136,14 +136,21 @@ self.addEventListener('message', event => {
   try {
     const network = new WorkerNetwork(message.network);
     const sample = trainingData[message.sampleIndex];
-    const before = network.forward(sample.input).output.toArray();
-    network.train(sample.input, sample.target);
+    const input = Array(network.layerSizes[0]).fill(0);
+    const target = Array(network.layerSizes.at(-1)).fill(0);
+    input[sample.inputIndex] = 1;
+    target[sample.targetIndex] = 1;
+    const before = network.forward(input).output.toArray();
+    const predictionIndex = before.reduce((best, value, index) => value > before[best] ? index : best, 0);
+    network.train(input, target);
     self.postMessage({
       type: 'trained',
       roundId: message.roundId,
       workerId: message.workerId,
       sampleIndex: message.sampleIndex,
-      prediction: before,
+      predictionIndex,
+      confidence: before[predictionIndex],
+      targetProbability: before[sample.targetIndex],
       network: network.serialize(),
     });
   } catch (error) {
